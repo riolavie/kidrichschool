@@ -1,0 +1,6 @@
+{
+  "name": "키즈리치 스쿨",
+  "description": "초등학생 금융 교육 및 학급 경제 시뮬레이터 (KidsRich School)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
