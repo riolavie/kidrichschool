@@ -80,11 +80,24 @@ VITE_FIREBASE_APP_ID="1:123456789:web:abcdef..."
 
 ---
 
-### 3단계: Vercel로 1클릭 무료 배포
+### 3단계-A: GitHub Pages로 바로 무료 배포 (별도 사이트 가입 불필요)
 
-1. 이 소스 코드를 본인의 **GitHub 저장소**에 Push합니다.
+> ⚠️ GitHub 무료 계정의 GitHub Pages는 저장소가 **`Public`** 상태여야 무료로 사용할 수 있습니다.
+
+1. 본 소스 코드를 본인의 **GitHub 저장소(`Public`)**에 Push합니다. (이 저장소에는 이미 `.github/workflows/deploy.yml` 자동 배포 파일이 포함되어 있습니다.)
+2. GitHub 저장소 상단 **[Settings]** ➔ 좌측 **[Secrets and variables]** ➔ **[Actions]** 클릭:
+   * **[Variables]** (또는 **[Secrets]**) 탭에서 위 `VITE_FIREBASE_*` 6개 값을 각각 등록합니다.
+3. GitHub 저장소 좌측 **[Pages]** 클릭:
+   * **Build and deployment** ➔ **Source**를 **`GitHub Actions`**로 선택합니다.
+4. 저장소 상단 **[Actions]** 탭 ➔ **`Deploy to GitHub Pages`** 선택 ➔ **[Run workflow]**를 누르면 1~2분 뒤 `https://본인아이디.github.io/저장소이름/` 주소로 자동 배포됩니다!
+
+---
+
+### 3단계-B: Vercel로 1클릭 무료 배포 (Private 비공개 저장소 사용 시 권장)
+
+1. 이 소스 코드를 본인의 **GitHub 저장소**(`Private` 가능)에 Push합니다.
 2. [Vercel](https://vercel.com/) 접속 ➔ GitHub으로 로그인.
-3. **[Add New...]** ➔ **[Project]** ➔ GitHub의 `kidsrich` 저장소 선택.
+3. **[Add New...]** ➔ **[Project]** ➔ GitHub의 `kidrichschool` 저장소 선택.
 4. **Environment Variables**에 위 Firebase 설정값 6개를 입력합니다.
 5. **[Deploy]** 버튼 클릭 ➔ 1분 만에 `https://my-kidsrich.vercel.app` 형태의 평생 무료 웹사이트가 완성됩니다!
 
