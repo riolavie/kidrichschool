@@ -102,6 +102,21 @@ interface ClassEconomyContextType {
   getSavedTeacherAccounts: () => TeacherAccount[];
   quickLoginTeacher: (teacher: TeacherAccount) => Promise<void>;
   quickLoginStudent: (studentId: string, targetClassCode?: string) => Promise<void>;
+  isSuperAdminSession: boolean;
+  loginSuperAdmin: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
+  impersonateClassAsTeacher: (target: {
+    classCode: string;
+    className?: string;
+    name?: string;
+    email?: string;
+    teacherId?: string;
+    schoolName?: string;
+    grade?: string;
+    classNum?: string;
+    password?: string;
+    createdAt?: string;
+  }) => Promise<void>;
+  returnToSuperAdmin: () => void;
   logout: () => void;
   // Student Actions (Atomic Firestore + Safe Integer Local Fallback)
   depositSavings: (amount: number) => Promise<boolean>;
@@ -434,6 +449,17 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
     return null;
   });
+  const [isSuperAdminSession, setIsSuperAdminSession] = useState<boolean>(() => {
+    try {
+      return (
+        sessionStorage.getItem('kidsrich_super_admin_session') === 'true' ||
+        sessionStorage.getItem('kidsrich_auth_role') === 'super_admin' ||
+        localStorage.getItem('kidsrich_auth_role') === 'super_admin'
+      );
+    } catch {
+      return false;
+    }
+  });
   const [isCloudConnected, setIsCloudConnected] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
@@ -744,12 +770,82 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setRole('student');
   };
 
+  const SUPER_ADMIN_EMAIL = 'skyhwg0516@gmail.com';
+  const SUPER_ADMIN_PASSWORD = 'dnjsrb0516!!@';
+
+  const loginSuperAdmin = async (email: string, password: string): Promise<{ success: boolean; message?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      return { success: false, message: '통합 관리자 아이디(이메일)와 비밀번호를 모두 입력해 주세요.' };
+    }
+    if (cleanEmail !== SUPER_ADMIN_EMAIL || password !== SUPER_ADMIN_PASSWORD) {
+      return { success: false, message: '통합 관리자 아이디 또는 비밀번호가 일치하지 않습니다.' };
+    }
+    setIsSuperAdminSession(true);
+    try {
+      sessionStorage.setItem('kidsrich_super_admin_session', 'true');
+      sessionStorage.setItem('kidsrich_auth_role', 'super_admin');
+      localStorage.setItem('kidsrich_auth_role', 'super_admin');
+    } catch (e) {}
+    setRole('super_admin');
+    return { success: true };
+  };
+
+  const impersonateClassAsTeacher = async (target: {
+    classCode: string;
+    className?: string;
+    name?: string;
+    email?: string;
+    teacherId?: string;
+    schoolName?: string;
+    grade?: string;
+    classNum?: string;
+    password?: string;
+    createdAt?: string;
+  }) => {
+    setIsSuperAdminSession(true);
+    try {
+      sessionStorage.setItem('kidsrich_super_admin_session', 'true');
+    } catch (e) {}
+    const teacherObj: TeacherAccount = {
+      teacherId: target.teacherId || (target.email || `admin_${target.classCode}`).replace(/[@.]/g, '_'),
+      name: target.name || '선생님',
+      email: target.email || 'teacher@school.kr',
+      schoolName: target.schoolName || '',
+      grade: target.grade || '',
+      classNum: target.classNum || '',
+      password: target.password || '',
+      classCode: normalizeClassCode(target.classCode) || 'C-10001',
+      className: target.className || '우리반',
+      createdAt: target.createdAt || new Date().toISOString()
+    };
+    await quickLoginTeacher(teacherObj);
+  };
+
+  const returnToSuperAdmin = () => {
+    if (!isSuperAdminSession && sessionStorage.getItem('kidsrich_super_admin_session') !== 'true') return;
+    setIsSuperAdminSession(true);
+    try {
+      sessionStorage.setItem('kidsrich_auth_role', 'super_admin');
+      localStorage.setItem('kidsrich_auth_role', 'super_admin');
+    } catch (e) {}
+    setRole('super_admin');
+  };
+
   const loginTeacher = async (emailOrId: string, password?: string): Promise<{ success: boolean; message?: string }> => {
     if (!emailOrId.trim()) {
       return { success: false, message: '교사 아이디, 이메일, 성함 또는 학급 코드를 입력해 주세요.' };
     }
     const cleanId = emailOrId.trim();
     const lowerCleanId = cleanId.toLowerCase();
+
+    // Super Admin fast login if using Super Admin credentials
+    if (lowerCleanId === SUPER_ADMIN_EMAIL) {
+      if (password === SUPER_ADMIN_PASSWORD) {
+        return await loginSuperAdmin(cleanId, password);
+      }
+      return { success: false, message: '통합 관리자 비밀번호가 일치하지 않습니다.' };
+    }
 
     // 1. Check cloud firestore first (if quota allows)
     let teacherDoc: TeacherAccount | null = null;
@@ -1309,6 +1405,8 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setRole('guest');
     setCurrentStudentId('');
     setCurrentTeacher(null);
+    setIsSuperAdminSession(false);
+    sessionStorage.removeItem('kidsrich_super_admin_session');
     sessionStorage.removeItem('kidsrich_auth_role');
     sessionStorage.removeItem('kidsrich_auth_student_id');
     sessionStorage.removeItem('kidsrich_auth_student_account');
@@ -1350,7 +1448,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Plan A: Real-time student collection streaming and transactions streaming are removed to prevent quota exhaustion.
   useEffect(() => {
     const classCode = state.classCode;
-    if (!classCode) return;
+    if (!classCode || role === 'super_admin') return;
 
     // 1. Subscribe to class settings & market (1 doc only)
     const unsubClass = subscribeToClass(
@@ -4032,7 +4130,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   // Automatic Background Scheduler (checks every 5s + on tab visibility return)
   useEffect(() => {
-    if (role === 'guest' || !state.classCode) return;
+    if (role === 'guest' || role === 'super_admin' || !state.classCode) return;
 
     const checkAndRunDue = () => {
       if (schedulerLockRef.current) return;
@@ -4200,6 +4298,10 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
         getSavedTeacherAccounts,
         quickLoginTeacher,
         quickLoginStudent,
+        isSuperAdminSession,
+        loginSuperAdmin,
+        impersonateClassAsTeacher,
+        returnToSuperAdmin,
         logout,
         depositSavings,
         withdrawSavings,

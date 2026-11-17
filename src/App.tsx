@@ -4,6 +4,7 @@ import { HeaderRoleSwitcher } from './components/HeaderRoleSwitcher';
 import { StudentDashboard } from './components/StudentDashboard';
 import { TeacherAdmin } from './components/TeacherAdmin';
 import { LoginView } from './components/LoginView';
+import { SuperAdminDashboard } from './components/SuperAdminDashboard';
 
 const MainContent: React.FC = () => {
   const { role } = useClassEconomy();
@@ -13,6 +14,7 @@ const MainContent: React.FC = () => {
       <HeaderRoleSwitcher />
       {role === 'student' && <StudentDashboard />}
       {role === 'teacher' && <TeacherAdmin />}
+      {role === 'super_admin' && <SuperAdminDashboard />}
       {role === 'guest' && <LoginView />}
     </div>
   );

@@ -1,6 +1,9 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getFirestore,
+  initializeFirestore,
+  memoryLocalCache,
+  setLogLevel,
   doc,
   setDoc,
   deleteDoc,
@@ -74,15 +77,28 @@ const fbConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
 };
 
+// Suppress noisy Firestore SDK v12 internal Watch existence BloomFilterError warnings
+setLogLevel('error');
+
 const app = getApps().length > 0 ? getApp() : initializeApp(fbConfig);
 
-// Initialize Firestore (default database or custom named database ID)
+// Initialize Firestore (default database or custom named database ID) with clean memory cache
 const customDbId = import.meta.env.VITE_FIREBASE_PROJECT_ID
   ? (import.meta.env.VITE_FIRESTORE_DATABASE_ID || '(default)')
   : (import.meta.env.VITE_FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId);
-export const db = customDbId && customDbId !== '(default)'
-  ? getFirestore(app, customDbId)
-  : getFirestore(app);
+const dbIdArg = customDbId && customDbId !== '(default)' ? customDbId : undefined;
+
+let firestoreInstance;
+try {
+  firestoreInstance = initializeFirestore(
+    app,
+    { localCache: memoryLocalCache() },
+    dbIdArg
+  );
+} catch {
+  firestoreInstance = dbIdArg ? getFirestore(app, dbIdArg) : getFirestore(app);
+}
+export const db = firestoreInstance;
 
 // Firestore Quota and error backoff guard
 let quotaExceededUntil = 0;
@@ -2067,4 +2083,157 @@ export async function resetScheduledScenarioToPending(classCode: string, scenari
     console.warn('resetScheduledScenarioToPending error:', err);
   }
 }
+
+// ============================================================================
+// SUPER ADMIN (통합 관리자) FIRESTORE HELPERS
+// ============================================================================
+
+export interface SuperAdminClassSummary {
+  classCode: string;
+  className: string;
+  teacherName: string;
+  teacherEmail: string;
+  currentRound: number;
+  totalRounds: number;
+  updatedAt: string;
+  studentCount?: number;
+}
+
+export async function fetchAllTeachersFromFirestore(): Promise<TeacherAccount[]> {
+  if (isFirestoreQuotaExceeded()) return [];
+  try {
+    const snap = await getDocs(collection(db, 'teachers'));
+    const list: TeacherAccount[] = [];
+    snap.forEach((d) => {
+      const data = d.data() as TeacherAccount;
+      if (data && (data.email || data.teacherId || data.name)) {
+        list.push({
+          ...data,
+          teacherId: data.teacherId || d.id
+        });
+      }
+    });
+    return list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  } catch (err) {
+    checkAndHandleFirestoreError(err);
+    console.warn('fetchAllTeachersFromFirestore error:', err);
+    return [];
+  }
+}
+
+export async function fetchAllClassesFromFirestore(): Promise<SuperAdminClassSummary[]> {
+  if (isFirestoreQuotaExceeded()) return [];
+  try {
+    const snap = await getDocs(collection(db, 'classes'));
+    const list: SuperAdminClassSummary[] = [];
+    snap.forEach((d) => {
+      const data = d.data() as any;
+      if (data) {
+        list.push({
+          classCode: data.classCode || d.id,
+          className: data.className || '우리반',
+          teacherName: data.teacherName || '',
+          teacherEmail: data.teacherEmail || '',
+          currentRound: Number(data.currentRound) || 1,
+          totalRounds: Number(data.totalRounds) || 10,
+          updatedAt: data.updatedAt || ''
+        });
+      }
+    });
+    return list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  } catch (err) {
+    checkAndHandleFirestoreError(err);
+    console.warn('fetchAllClassesFromFirestore error:', err);
+    return [];
+  }
+}
+
+export async function fetchClassStudentsForSuperAdmin(classCode: string): Promise<Student[]> {
+  if (!classCode || isFirestoreQuotaExceeded()) return [];
+  try {
+    const snap = await getDocs(collection(db, 'classes', classCode, 'students'));
+    const raw: Student[] = [];
+    snap.forEach((d) => {
+      raw.push(d.data() as Student);
+    });
+    return deduplicateStudents(raw).unique.sort((a, b) => (a.number || 0) - (b.number || 0));
+  } catch (err) {
+    checkAndHandleFirestoreError(err);
+    console.warn('fetchClassStudentsForSuperAdmin error:', err);
+    return [];
+  }
+}
+
+export async function fetchClassFullSnapshotFromFirestore(classCode: string): Promise<{
+  classState: Partial<ClassEconomyState> | null;
+  students: Student[];
+  transactions: Transaction[];
+}> {
+  if (!classCode || isFirestoreQuotaExceeded()) {
+    return { classState: null, students: [], transactions: [] };
+  }
+  try {
+    const [classSnap, studentsSnap, txSnap] = await Promise.all([
+      getDoc(doc(db, 'classes', classCode)),
+      getDocs(collection(db, 'classes', classCode, 'students')),
+      getDocs(query(collection(db, 'classes', classCode, 'transactions'), orderBy('timestamp', 'desc'), limit(200)))
+    ]);
+
+    const classState = classSnap.exists() ? (classSnap.data() as Partial<ClassEconomyState>) : null;
+    const rawStudents: Student[] = [];
+    studentsSnap.forEach((d) => rawStudents.push(d.data() as Student));
+    const students = deduplicateStudents(rawStudents).unique.sort((a, b) => (a.number || 0) - (b.number || 0));
+
+    const transactions: Transaction[] = [];
+    txSnap.forEach((d) => transactions.push(d.data() as Transaction));
+
+    return { classState, students, transactions };
+  } catch (err) {
+    checkAndHandleFirestoreError(err);
+    console.warn('fetchClassFullSnapshotFromFirestore error:', err);
+    return { classState: null, students: [], transactions: [] };
+  }
+}
+
+export async function deleteTeacherFromFirestore(teacherId: string): Promise<boolean> {
+  if (!teacherId) return false;
+  try {
+    const docId = teacherId.replace(/[@.]/g, '_');
+    await Promise.all([
+      deleteDoc(doc(db, 'teachers', docId)).catch(() => {}),
+      deleteDoc(doc(db, 'teachers', teacherId)).catch(() => {})
+    ]);
+    return true;
+  } catch (err) {
+    console.warn('deleteTeacherFromFirestore error:', err);
+    return false;
+  }
+}
+
+export async function deleteClassCompletelyFromFirestore(classCode: string): Promise<boolean> {
+  if (!classCode) return false;
+  try {
+    const studentsSnap = await getDocs(collection(db, 'classes', classCode, 'students'));
+    const txSnap = await getDocs(collection(db, 'classes', classCode, 'transactions'));
+    const batch = writeBatch(db);
+    let ops = 0;
+    studentsSnap.forEach((d) => {
+      batch.delete(d.ref);
+      ops++;
+    });
+    txSnap.forEach((d) => {
+      if (ops < 450) {
+        batch.delete(d.ref);
+        ops++;
+      }
+    });
+    batch.delete(doc(db, 'classes', classCode));
+    await batch.commit();
+    return true;
+  } catch (err) {
+    console.warn('deleteClassCompletelyFromFirestore error:', err);
+    return false;
+  }
+}
+
 

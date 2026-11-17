@@ -78,23 +78,3 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(26, 26, 26, 0.4);
 }
-
-/* Horizontal Menu Scrollbar */
-.nav-scrollbar::-webkit-scrollbar {
-  height: 8px;
-}
-.nav-scrollbar::-webkit-scrollbar-track {
-  background: #e2ddd5;
-  border-radius: 4px;
-}
-.nav-scrollbar::-webkit-scrollbar-thumb {
-  background: #1a1a1a;
-  border-radius: 4px;
-}
-.nav-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #404040;
-}
-.nav-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: #1a1a1a #e2ddd5;
-}

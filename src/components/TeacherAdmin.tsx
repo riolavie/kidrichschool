@@ -13,6 +13,8 @@ export const TeacherAdmin: React.FC = () => {
   const {
     state,
     currentTeacher,
+    isSuperAdminSession,
+    returnToSuperAdmin,
     logout,
     isSyncing,
     lastSyncedAt,
@@ -59,47 +61,11 @@ export const TeacherAdmin: React.FC = () => {
   const [selectedAnalyticsStudentId, setSelectedAnalyticsStudentId] = useState<string>('');
 
   const navTabsRef = React.useRef<HTMLDivElement>(null);
-  const [navScrollProgress, setNavScrollProgress] = useState<number>(0);
-
-  const updateNavScrollMetrics = React.useCallback(() => {
-    if (navTabsRef.current) {
-      const { scrollLeft, scrollWidth, clientWidth } = navTabsRef.current;
-      const maxScroll = scrollWidth - clientWidth;
-      if (maxScroll > 0) {
-        setNavScrollProgress(Math.min(100, Math.max(0, (scrollLeft / maxScroll) * 100)));
-      } else {
-        setNavScrollProgress(0);
-      }
-    }
-  }, []);
-
-  React.useEffect(() => {
-    updateNavScrollMetrics();
-    const el = navTabsRef.current;
-    if (el) {
-      el.addEventListener('scroll', updateNavScrollMetrics, { passive: true });
-      window.addEventListener('resize', updateNavScrollMetrics);
-      return () => {
-        el.removeEventListener('scroll', updateNavScrollMetrics);
-        window.removeEventListener('resize', updateNavScrollMetrics);
-      };
-    }
-  }, [updateNavScrollMetrics]);
 
   const handleScrollNav = (direction: 'left' | 'right') => {
     if (navTabsRef.current) {
       const scrollAmount = direction === 'left' ? -280 : 280;
       navTabsRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
-    }
-  };
-
-  const handleNavSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = Number(e.target.value);
-    setNavScrollProgress(val);
-    if (navTabsRef.current) {
-      const { scrollWidth, clientWidth } = navTabsRef.current;
-      const maxScroll = scrollWidth - clientWidth;
-      navTabsRef.current.scrollLeft = (val / 100) * maxScroll;
     }
   };
 
@@ -463,13 +429,12 @@ export const TeacherAdmin: React.FC = () => {
   const [customResetPin, setCustomResetPin] = useState('1234');
   const [stockToastMessage, setStockToastMessage] = useState<string | null>(null);
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
-  const [migrationModalTab, setMigrationModalTab] = useState<'distribute' | 'migration'>('distribute');
-  const [rulesCopied, setRulesCopied] = useState(false);
+  const [contactEmailCopied, setContactEmailCopied] = useState(false);
   const [inviteCopied, setInviteCopied] = useState(false);
   const [guideTextCopied, setGuideTextCopied] = useState(false);
   const [isRepairingConsistency, setIsRepairingConsistency] = useState(false);
 
-  // JSON Full Backup & Restore for GitHub Migration / Permanent Archiving
+  // JSON Full Backup & Restore for Permanent Archiving
   const backupFileInputRef = React.useRef<HTMLInputElement>(null);
   const [pendingBackupRestore, setPendingBackupRestore] = useState<{
     fileName: string;
@@ -1035,6 +1000,17 @@ export const TeacherAdmin: React.FC = () => {
 
           {/* Right: Cloud Sync, Teacher Profile & Logout */}
           <div className="flex items-center gap-2 md:gap-3 shrink-0">
+            {isSuperAdminSession && (
+              <button
+                type="button"
+                onClick={returnToSuperAdmin}
+                title="통합 관리자 총괄 화면으로 돌아가기"
+                className="h-8 px-3 bg-[#1a1a1a] hover:bg-stone-800 text-amber-300 rounded-2xs font-bold text-xs flex items-center gap-1.5 transition-all shadow-2xs whitespace-nowrap btn-press"
+              >
+                <span className="material-symbols-outlined text-[15px]">admin_panel_settings</span>
+                <span>통합 관리자로 복귀</span>
+              </button>
+            )}
             {/* On-Demand Data Refresh (Plan A) */}
             <button
               onClick={handleManualSync}
@@ -1052,20 +1028,17 @@ export const TeacherAdmin: React.FC = () => {
               </span>
             </button>
 
-            {/* Share & GitHub Migration Guide Button */}
+            {/* Share & Inquiry Modal Button */}
             <button
-              onClick={() => {
-                setMigrationModalTab('distribute');
-                setIsMigrationModalOpen(true);
-              }}
-              title="다른 선생님께 앱 배포·공유 및 GitHub 개인 운영 가이드"
+              onClick={() => setIsMigrationModalOpen(true)}
+              title="학생 초대 링크, 앱 공유 및 상세 문의 안내"
               className="h-8 px-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-2xs font-bold text-xs flex items-center gap-1.5 transition-all shadow-2xs whitespace-nowrap btn-press"
             >
               <span className="material-symbols-outlined text-[16px] text-amber-800">
-                rocket_launch
+                mail
               </span>
-              <span className="hidden md:inline">배포·공유 & GitHub 가이드</span>
-              <span className="md:hidden">배포·공유</span>
+              <span className="hidden md:inline">공유 &amp; 상세 문의</span>
+              <span className="md:hidden">공유·문의</span>
             </button>
 
             {/* Teacher Profile Chip */}
@@ -1224,20 +1197,21 @@ export const TeacherAdmin: React.FC = () => {
             </button>
           </div>
         </section>
-        {/* Tabs Navigation with Visible Horizontal Scrollbar & Controls */}
+        {/* Tabs Navigation with Button-Only Movement (No Scrollbar) */}
         <div className="relative flex items-center gap-1.5 w-full bg-[#faf8f5]/80 p-1 rounded-sm border border-[#1a1a1a]/15 shadow-2xs">
           <button
             type="button"
             onClick={() => handleScrollNav('left')}
             className="shrink-0 w-8 h-9 bg-white hover:bg-stone-100 border border-[#1a1a1a]/20 rounded-2xs flex items-center justify-center text-[#1a1a1a] shadow-2xs transition-colors btn-press cursor-pointer"
-            title="메뉴 왼쪽으로 스크롤"
+            title="이전 메뉴로 이동"
+            aria-label="이전 메뉴로 이동"
           >
             <span className="material-symbols-outlined text-[18px]">chevron_left</span>
           </button>
 
           <nav
             ref={navTabsRef}
-            className="flex-1 flex gap-1 md:gap-1.5 border-b-2 border-[#1a1a1a]/15 pb-2 pt-0.5 overflow-x-auto nav-scrollbar scroll-smooth"
+            className="flex-1 flex gap-1 md:gap-1.5 border-b-2 border-[#1a1a1a]/15 pb-1.5 pt-0.5 overflow-x-auto no-scrollbar scroll-smooth"
           >
             <button
               onClick={() => setActiveTab('general')}
@@ -1358,60 +1332,11 @@ export const TeacherAdmin: React.FC = () => {
             type="button"
             onClick={() => handleScrollNav('right')}
             className="shrink-0 w-8 h-9 bg-white hover:bg-stone-100 border border-[#1a1a1a]/20 rounded-2xs flex items-center justify-center text-[#1a1a1a] shadow-2xs transition-colors btn-press cursor-pointer"
-            title="메뉴 오른쪽으로 스크롤"
+            title="다음 메뉴로 이동"
+            aria-label="다음 메뉴로 이동"
           >
             <span className="material-symbols-outlined text-[18px]">chevron_right</span>
           </button>
-        </div>
-
-        {/* Dedicated Horizontal Scroll Bar underneath menu tabs */}
-        <div className="w-full bg-[#faf8f5] px-3.5 py-2 -mt-3 mb-2 rounded-sm border border-[#1a1a1a]/15 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-2.5">
-          <div className="flex items-center gap-2.5 w-full sm:w-auto flex-1">
-            <span className="material-symbols-outlined text-[18px] text-[#1a1a1a]/70 shrink-0">
-              swap_horizontal_circle
-            </span>
-            <span className="text-xs font-bold text-[#1a1a1a] shrink-0">
-              메뉴 좌우 스크롤 바:
-            </span>
-
-            {/* Slider bar for mouse drag / touch scroll */}
-            <div className="relative flex-1 flex items-center max-w-sm md:max-w-md">
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={Math.round(navScrollProgress)}
-                onChange={handleNavSliderChange}
-                className="w-full h-2.5 bg-stone-300 rounded-lg appearance-none cursor-pointer accent-[#1a1a1a] hover:bg-stone-400 transition-colors"
-                title="좌우로 드래그하여 전체 8개 메뉴를 확인하세요"
-              />
-            </div>
-            <span className="text-[11px] font-mono font-bold text-[#1a1a1a]/60 shrink-0">
-              {Math.round(navScrollProgress)}%
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1.5 shrink-0 w-full sm:w-auto justify-end">
-            <span className="text-[11px] text-[#1a1a1a]/60 hidden md:inline">
-              전체 8개 관리자 메뉴:
-            </span>
-            <button
-              type="button"
-              onClick={() => handleScrollNav('left')}
-              className="px-2.5 py-1 bg-white hover:bg-stone-100 border border-[#1a1a1a]/20 rounded-2xs text-xs font-bold text-[#1a1a1a] flex items-center gap-1 shadow-2xs btn-press"
-            >
-              <span className="material-symbols-outlined text-[15px]">chevron_left</span>
-              이전 메뉴
-            </button>
-            <button
-              type="button"
-              onClick={() => handleScrollNav('right')}
-              className="px-2.5 py-1 bg-white hover:bg-stone-100 border border-[#1a1a1a]/20 rounded-2xs text-xs font-bold text-[#1a1a1a] flex items-center gap-1 shadow-2xs btn-press"
-            >
-              다음 메뉴
-              <span className="material-symbols-outlined text-[15px]">chevron_right</span>
-            </button>
-          </div>
         </div>
 
         {/* TAB 0: GENERAL CLASS SETTINGS */}
@@ -1849,17 +1774,17 @@ export const TeacherAdmin: React.FC = () => {
               </div>
             </div>
 
-            {/* Invite Link & Colleague Distribution Quick Card */}
+            {/* Invite Link & Inquiry Quick Card */}
             <div className="pt-6 border-t border-[#1a1a1a]/15">
               <div className="bg-indigo-50/70 rounded-sm p-6 border border-indigo-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2 text-indigo-950 font-bold text-sm">
                     <span className="material-symbols-outlined text-lg text-indigo-700">share</span>
-                    학생 초대 링크 & 다른 선생님께 앱 배포·공유하기
+                    학생 초대 링크 &amp; 상세 문의
                   </div>
                   <p className="text-xs text-indigo-900/80 leading-relaxed">
                     학생들에게 아래 전용 링크를 공유하면 학급 코드(<strong>{state.classCode}</strong>)가 자동으로 입력된 로그인 화면이 열립니다.<br />
-                    동료 선생님은 앱 첫 화면에서 <strong>[교사 회원가입]</strong>만 하면 각자 고유 학급 코드로 데이터가 완전히 분리되어 운영됩니다.
+                    서비스 이용 및 별도 도입 문의는 <strong>riolavie0516@naver.com</strong>으로 연락해 주세요.
                   </p>
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <code className="px-2.5 py-1 bg-white border border-indigo-200 rounded-2xs text-[11px] font-mono text-indigo-950 select-all">
@@ -1878,30 +1803,27 @@ export const TeacherAdmin: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setMigrationModalTab('distribute');
-                      setIsMigrationModalOpen(true);
-                    }}
+                    onClick={() => setIsMigrationModalOpen(true)}
                     className="px-4 py-2.5 bg-white hover:bg-stone-50 border border-indigo-300 text-indigo-950 font-bold text-xs rounded-2xs shadow-xs transition-colors whitespace-nowrap flex items-center justify-center gap-1.5"
                   >
-                    <span className="material-symbols-outlined text-base">rocket_launch</span>
-                    선생님 배포 가이드 보기
+                    <span className="material-symbols-outlined text-base">mail</span>
+                    공유 &amp; 문의 안내
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* GitHub Migration & Full Data Backup Card */}
+            {/* Full Data Backup & Restore Card */}
             <div className="pt-6 border-t border-[#1a1a1a]/15">
               <div className="bg-emerald-50/80 rounded-sm p-6 border border-emerald-300 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <div className="flex items-center gap-2 text-emerald-950 font-bold text-sm mb-1">
                     <span className="material-symbols-outlined text-lg text-emerald-800">cloud_download</span>
-                    GitHub 이전 & 영구 보존용 전체 학급 데이터 백업/복원
+                    영구 보존용 전체 학급 데이터 백업 / 복원
                   </div>
                   <p className="text-xs text-emerald-900/80 leading-relaxed">
                     현재 Round {state.currentRound} 기준 등록된 <strong>학생 {state.students.length}명 전원</strong>의 보유 현금, 예금, 주식, 부채, 예약 시나리오 및 학급 설정을 1개의 JSON 파일로 영구 보관합니다.<br />
-                    깃허브 기반의 새 서비스로 이전하거나 학기 말 데이터를 보관할 때 이 파일 하나로 <strong>100% 원상 복원</strong>할 수 있습니다.
+                    학기 말 데이터를 안전하게 보관하거나 백업 시점 상태로 되돌릴 때 이 파일 하나로 <strong>100% 원상 복원</strong>할 수 있습니다.
                   </p>
                 </div>
                 <div className="flex flex-wrap sm:flex-nowrap gap-2 shrink-0">
@@ -2591,7 +2513,7 @@ export const TeacherAdmin: React.FC = () => {
             </div>
 
             {/* Right Column: Real-time Leaderboard */}
-            <div className="w-full lg:w-[58%] bg-white rounded-sm shadow-2xs border border-[#1a1a1a]/15 flex flex-col h-full overflow-hidden">
+            <div className="w-full lg:w-[58%] bg-white rounded-sm shadow-2xs border border-[#1a1a1a]/15 flex flex-col overflow-hidden">
               <div className="p-4 md:p-5 border-b border-[#1a1a1a]/15 flex flex-wrap justify-between items-center gap-3 bg-[#faf8f5]">
                 <div>
                   <div className="flex items-center gap-2">
@@ -2627,7 +2549,7 @@ export const TeacherAdmin: React.FC = () => {
                 </div>
               </div>
 
-              <div className="overflow-x-auto flex-1 max-h-[600px]">
+              <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[500px]">
                   <thead className="bg-[#faf8f5] border-b border-[#1a1a1a]/15 sticky top-0 z-10 text-[11px] font-bold uppercase tracking-wider text-[#1a1a1a]/60">
                     <tr>
@@ -2713,7 +2635,7 @@ export const TeacherAdmin: React.FC = () => {
                   type="button"
                   onClick={handleDownloadFullBackup}
                   className="h-9 px-3.5 rounded-2xs bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold text-xs hover:bg-emerald-100 transition-colors flex items-center gap-1.5 shadow-2xs"
-                  title="26명 학생들의 자산/주식/예금/거래기록/학급설정 전체를 깃허브 이전 및 영구 보존용 JSON 파일로 다운로드합니다"
+                  title="등록된 학생들의 자산/주식/예금/거래기록/학급설정 전체를 영구 보존용 JSON 파일로 다운로드합니다"
                 >
                   <span className="material-symbols-outlined text-sm text-emerald-800">save</span>
                   전체 백업 (JSON)
@@ -5118,10 +5040,10 @@ export const TeacherAdmin: React.FC = () => {
       <BulkStudentModal isOpen={isBulkStudentOpen} onClose={() => setIsBulkStudentOpen(false)} />
       <AddShopItemModal isOpen={isAddShopOpen} onClose={() => setIsAddShopOpen(false)} />
 
-      {/* App Distribution & GitHub/Personal Firebase Migration Modal */}
+      {/* App Sharing, Copyright & Contact Inquiry Modal */}
       {isMigrationModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1a1a1a]/50 backdrop-blur-2xs p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-sm max-w-2xl w-full p-6 shadow-2xl border border-[#1a1a1a]/15 max-h-[90vh] overflow-y-auto relative">
+          <div className="bg-white rounded-sm max-w-xl w-full p-6 shadow-2xl border border-[#1a1a1a]/15 max-h-[90vh] overflow-y-auto relative">
             <button
               onClick={() => setIsMigrationModalOpen(false)}
               className="absolute top-4 right-4 text-[#1a1a1a]/50 hover:text-[#1a1a1a] w-8 h-8 flex items-center justify-center rounded-2xs hover:bg-[#faf8f5]"
@@ -5131,208 +5053,100 @@ export const TeacherAdmin: React.FC = () => {
 
             <div className="flex items-center gap-3 mb-4 pb-3 border-b border-[#1a1a1a]/10">
               <div className="w-10 h-10 rounded-2xs bg-amber-100 border border-amber-300 flex items-center justify-center text-xl text-amber-900">
-                🚀
+                <span className="material-symbols-outlined text-[22px]">mail</span>
               </div>
               <div>
                 <h3 className="font-editorial text-xl font-bold text-[#1a1a1a]">
-                  다른 선생님 배포·공유 & GitHub 영구 운영 가이드
+                  앱 공유 및 상세 문의 안내
                 </h3>
                 <p className="text-xs text-[#1a1a1a]/70">
-                  동료 선생님과 우리 반 학생들에게 안전하게 배포하고, 필요 시 개인 서버로 독립 이전하세요.
+                  우리 반 학생 초대 링크 및 서비스 이용·도입 문의를 확인하실 수 있습니다.
                 </p>
               </div>
             </div>
 
-            {/* 2-Tab Switcher */}
-            <div className="flex bg-[#faf8f5] p-1 rounded-2xs border border-[#1a1a1a]/15 mb-4">
-              <button
-                type="button"
-                onClick={() => setMigrationModalTab('distribute')}
-                className={`flex-1 py-2 rounded-2xs text-xs font-bold transition-all ${
-                  migrationModalTab === 'distribute'
-                    ? 'bg-[#1a1a1a] text-white shadow-2xs'
-                    : 'text-[#1a1a1a]/70 hover:text-[#1a1a1a]'
-                }`}
-              >
-                👩‍🏫 다른 선생님께 앱 배포·공유하기
-              </button>
-              <button
-                type="button"
-                onClick={() => setMigrationModalTab('migration')}
-                className={`flex-1 py-2 rounded-2xs text-xs font-bold transition-all ${
-                  migrationModalTab === 'migration'
-                    ? 'bg-[#1a1a1a] text-white shadow-2xs'
-                    : 'text-[#1a1a1a]/70 hover:text-[#1a1a1a]'
-                }`}
-              >
-                🛠️ GitHub & 개인 Firebase 이전 가이드
-              </button>
-            </div>
-
-            {migrationModalTab === 'distribute' ? (
-              <div className="space-y-4 text-xs leading-relaxed text-[#1a1a1a]/90">
-                {/* Student Invite Link */}
-                <div className="p-4 bg-indigo-50/80 rounded-2xs border border-indigo-300">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                    <span className="font-bold text-sm text-indigo-950 flex items-center gap-1.5">
-                      <span>🎒</span> 우리 반 학생 전용 초대 링크 (학급 코드 자동 입력)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCopyInviteUrl}
-                      className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-800 text-white rounded-2xs font-bold text-xs shadow-2xs flex items-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-sm">content_copy</span>
-                      {inviteCopied ? '✓ 복사 완료' : '학생 초대 링크 복사'}
-                    </button>
-                  </div>
-                  <code className="block p-2 bg-white border border-indigo-200 rounded-2xs text-[11px] font-mono text-indigo-950 select-all break-all">
-                    {studentInviteUrl}
-                  </code>
-                </div>
-
-                {/* Method A: Shared Web App with Teacher Class Isolation */}
-                <div className="p-4 bg-emerald-50/80 rounded-2xs border border-emerald-300 space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-bold text-sm text-emerald-950">
-                      방법 A. 현재 배포 웹 주소 공유 (가장 빠름 · 데이터 완전 분리)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
-                        const guideMsg = `[키즈리치 학급 경제 앱 안내]\n1. 접속 주소: ${baseUrl}\n2. 첫 화면에서 [교사 전용] -> [교사 회원가입] 클릭\n3. 선생님만의 고유 학급 코드(예: C-XXXXX)로 학급을 개설하시면 다른 선생님 반과 데이터가 완전히 분리되어 운영됩니다.\n4. 개설 후 관리자 화면에서 [학생 초대 링크]를 복사해 반 학생들에게 전달하세요!`;
-                        navigator.clipboard.writeText(guideMsg);
-                        setGuideTextCopied(true);
-                        setTimeout(() => setGuideTextCopied(false), 2500);
-                      }}
-                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xs font-bold text-xs shadow-2xs flex items-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-sm">content_copy</span>
-                      {guideTextCopied ? '✓ 안내문 복사됨' : '동료 교사 안내문 복사'}
-                    </button>
-                  </div>
-                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-emerald-900">
-                    <li>동료 선생님께 현재 웹사이트 주소를 그대로 전달합니다.</li>
-                    <li>동료 선생님이 <strong>[교사 회원가입]</strong>으로 가입하면 자동으로 새 학급 코드(예: <code>C-48291</code>)가 발급되며, 우리 반 학생/자산 데이터와 <strong>100% 독립 분리</strong>됩니다.</li>
-                    <li>동료 선생님도 자신의 학급 코드가 담긴 <strong>학생 초대 링크</strong>를 학생들에게 배포하여 바로 수업을 시작할 수 있습니다.</li>
-                  </ol>
-                </div>
-
-                {/* Method B: Independent Repository + Vercel + Own Firebase */}
-                <div className="p-4 bg-white rounded-2xs border border-[#1a1a1a]/15 space-y-1.5">
-                  <span className="font-bold text-sm text-[#1a1a1a] block">
-                    방법 B. 학교/교사별 완전 독립 서버로 배포 (GitHub + Vercel + 개인 Firebase)
+            <div className="space-y-4 text-xs leading-relaxed text-[#1a1a1a]/90">
+              {/* Student Invite Link */}
+              <div className="p-4 bg-indigo-50/80 rounded-2xs border border-indigo-300">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                  <span className="font-bold text-sm text-indigo-950 flex items-center gap-1.5">
+                    <span>🎒</span> 우리 반 학생 전용 초대 링크 (학급 코드 자동 입력)
                   </span>
-                  <p className="text-[11px] text-[#1a1a1a]/75">
-                    여러 반(예: 전교 동시 접속)으로 인해 Firestore 무료 일일 읽기/쓰기 한도(일 5만 읽기 / 2만 쓰기)를 각자 여유롭게 쓰고 싶다면, 동료 선생님이 GitHub 저장소를 Fork한 뒤 Vercel과 본인 Google 계정의 무료 Firebase를 연결하도록 안내해 주세요.
-                  </p>
                   <button
                     type="button"
-                    onClick={() => setMigrationModalTab('migration')}
-                    className="text-[11px] font-bold text-[#005da7] hover:underline flex items-center gap-1 pt-1"
+                    onClick={handleCopyInviteUrl}
+                    className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-800 text-white rounded-2xs font-bold text-xs shadow-2xs flex items-center gap-1"
                   >
-                    <span>GitHub + Vercel + Firebase 3분 세팅 방법 보기</span>
-                    <span className="material-symbols-outlined text-sm">arrow_forward</span>
+                    <span className="material-symbols-outlined text-sm">content_copy</span>
+                    {inviteCopied ? '✓ 복사 완료' : '학생 초대 링크 복사'}
+                  </button>
+                </div>
+                <code className="block p-2 bg-white border border-indigo-200 rounded-2xs text-[11px] font-mono text-indigo-950 select-all break-all">
+                  {studentInviteUrl}
+                </code>
+              </div>
+
+              {/* Simple Service URL Share */}
+              <div className="p-4 bg-emerald-50/80 rounded-2xs border border-emerald-300 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-bold text-sm text-emerald-950">
+                    👩‍🏫 동료 선생님 이용 안내 (학급 데이터 자동 분리)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+                      const guideMsg = `[키즈리치 학급 경제 앱 안내]\n1. 접속 주소: ${baseUrl}\n2. 첫 화면에서 [교사 전용] -> [교사 회원가입]으로 본인 학급을 개설해 주세요.\n3. 상세 문의: riolavie0516@naver.com`;
+                      navigator.clipboard.writeText(guideMsg);
+                      setGuideTextCopied(true);
+                      setTimeout(() => setGuideTextCopied(false), 2500);
+                    }}
+                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xs font-bold text-xs shadow-2xs flex items-center gap-1"
+                  >
+                    <span className="material-symbols-outlined text-sm">content_copy</span>
+                    {guideTextCopied ? '✓ 안내문 복사됨' : '이용 안내문 복사'}
+                  </button>
+                </div>
+                <p className="text-[11px] text-emerald-900">
+                  현재 웹사이트 주소에서 선생님별로 고유 학급 코드를 발급받아 독립적으로 학급 경제를 운영할 수 있습니다.
+                </p>
+              </div>
+
+              {/* Copyright & Contact Email Card */}
+              <div className="p-4 bg-[#faf8f5] rounded-2xs border border-[#1a1a1a]/20 space-y-2.5">
+                <div className="flex items-center gap-1.5 font-bold text-sm text-[#1a1a1a]">
+                  <span className="material-symbols-outlined text-[18px]">copyright</span>
+                  <span>저작권 안내 및 상세 문의</span>
+                </div>
+                <p className="text-[11px] text-[#1a1a1a]/75 leading-relaxed">
+                  본 서비스의 소스 코드, 디자인 및 운영 구조에 대한 저작권은 제작자에게 있으며 무단 복제·재배포·임의 호스팅을 금지합니다.<br />
+                  별도 도입, 학교 단위 운영, 계정 발급 및 기타 상세 문의는 아래 이메일로 연락해 주세요.
+                </p>
+                <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-white border border-[#1a1a1a]/15 rounded-2xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold text-[#1a1a1a]/60">상세 문의 이메일</span>
+                    <a
+                      href="mailto:riolavie0516@naver.com"
+                      className="font-mono font-bold text-xs text-[#005da7] hover:underline select-all"
+                    >
+                      riolavie0516@naver.com
+                    </a>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText('riolavie0516@naver.com');
+                      setContactEmailCopied(true);
+                      setTimeout(() => setContactEmailCopied(false), 2500);
+                    }}
+                    className="px-2.5 py-1 bg-[#1a1a1a] hover:bg-stone-800 text-white rounded-2xs font-bold text-[11px] flex items-center gap-1"
+                  >
+                    <span className="material-symbols-outlined text-[13px]">content_copy</span>
+                    {contactEmailCopied ? '✓ 복사됨' : '이메일 복사'}
                   </button>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-4 text-xs leading-relaxed text-[#1a1a1a]/90">
-                {/* Step 1 */}
-                <div className="p-4 bg-emerald-50/80 rounded-2xs border border-emerald-300">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="font-bold text-sm text-emerald-950 flex items-center gap-1.5">
-                      <span>1단계.</span> 현재 학급 데이터 백업 다운로드
-                    </span>
-                    <button
-                      onClick={handleDownloadFullBackup}
-                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xs font-bold text-xs shadow-2xs flex items-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-sm">download</span>
-                      백업 파일 받기 (.json)
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-emerald-900/80">
-                    현재 Round {state.currentRound} 기준 학생 {state.students.length}명의 현금, 예금, 주식, 부채, 예약 시나리오, 거래 내역이 모두 담긴 JSON 파일입니다.
-                  </p>
-                </div>
-
-                {/* Step 2 */}
-                <div className="p-4 bg-white rounded-2xs border border-[#1a1a1a]/15">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-bold text-sm text-[#1a1a1a] flex items-center gap-1.5">
-                      <span>2단계.</span> 선생님 구글 계정으로 평생 무료 Firebase 생성 (3분)
-                    </span>
-                    <a
-                      href="https://console.firebase.google.com"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-3 py-1 bg-[#1a1a1a] text-white rounded-2xs font-bold text-[11px] hover:bg-stone-800 flex items-center gap-1"
-                    >
-                      <span>Firebase 콘솔 열기</span>
-                      <span className="material-symbols-outlined text-xs">open_in_new</span>
-                    </a>
-                  </div>
-                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-[#1a1a1a]/80">
-                    <li><strong>프로젝트 추가</strong> ➔ 이름(예: <code>my-class-economy</code>) 입력 후 생성 (애널리틱스 체크 해제 권장).</li>
-                    <li>좌측 <strong>빌드 ➔ Firestore Database</strong> 클릭 ➔ [데이터베이스 만들기] (위치: 서울 <code>asia-northeast3</code>).</li>
-                    <li>상단 <strong>[규칙(Rules)]</strong> 탭에 아래 보안 규칙을 붙여넣고 [게시]를 누릅니다:</li>
-                  </ol>
-
-                  <div className="mt-2 relative">
-                    <pre className="p-2.5 bg-[#faf8f5] rounded-2xs border border-[#1a1a1a]/15 text-[10px] font-mono overflow-x-auto text-stone-800">
-{`rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /teachers/{teacherId} { allow read, write: if true; }
-    match /classes/{classCode} {
-      allow read, write: if true;
-      match /students/{studentId} { allow read, write: if true; }
-      match /transactions/{txId} { allow read, write: if true; }
-    }
-  }
-}`}
-                    </pre>
-                    <button
-                      onClick={() => {
-                        const rules = `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /teachers/{teacherId} { allow read, write: if true; }\n    match /classes/{classCode} {\n      allow read, write: if true;\n      match /students/{studentId} { allow read, write: if true; }\n      match /transactions/{txId} { allow read, write: if true; }\n    }\n  }\n}`;
-                        navigator.clipboard.writeText(rules);
-                        setRulesCopied(true);
-                        setTimeout(() => setRulesCopied(false), 2500);
-                      }}
-                      className="absolute top-2 right-2 px-2 py-1 bg-white border border-[#1a1a1a]/20 text-xs font-bold rounded-2xs hover:bg-stone-50 shadow-2xs"
-                    >
-                      {rulesCopied ? '✓ 복사완료' : '규칙 복사'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Step 3 */}
-                <div className="p-4 bg-white rounded-2xs border border-[#1a1a1a]/15">
-                  <span className="font-bold text-sm text-[#1a1a1a] flex items-center gap-1.5 mb-1.5">
-                    <span>3단계.</span> GitHub ➔ Vercel 1클릭 무료 배포
-                  </span>
-                  <p className="text-[11px] text-[#1a1a1a]/70 mb-2">
-                    이 소스코드를 GitHub 저장소에 Push한 뒤, <a href="https://vercel.com" target="_blank" rel="noreferrer" className="text-blue-700 underline font-bold">Vercel</a>에서 GitHub 계정으로 로그인하여 해당 저장소를 선택하면 1분 만에 고유 웹 주소(예: <code>https://my-kidsrich.vercel.app</code>)가 생성됩니다.
-                  </p>
-                  <div className="p-2.5 bg-stone-50 rounded-2xs border border-[#1a1a1a]/10 text-[11px]">
-                    <strong>환경 변수(Environment Variables) 입력:</strong><br />
-                    Firebase 프로젝트 설정(톱니바퀴) ➔ 웹 앱(<code>&lt;/&gt;</code>)에서 제공하는 <code>apiKey</code>, <code>projectId</code> 등을 Vercel 설정에 <code>VITE_FIREBASE_API_KEY</code> 등으로 등록하시면 됩니다.
-                  </div>
-                </div>
-
-                {/* Step 4 */}
-                <div className="p-4 bg-blue-50/80 rounded-2xs border border-blue-200">
-                  <span className="font-bold text-sm text-blue-950 flex items-center gap-1.5 mb-1">
-                    <span>4단계.</span> 새 사이트에서 [백업 복원] 클릭
-                  </span>
-                  <p className="text-[11px] text-blue-900/80 leading-relaxed">
-                    새로 배포된 Vercel 웹사이트에 선생님 계정으로 로그인한 뒤, 관리자 화면의 <strong>[백업 복원]</strong> 버튼을 누르고 1단계에서 다운받았던 <code>kidsrich_backup_...json</code> 파일을 업로드하면 <strong>전체 학생의 데이터가 선생님의 새 Firebase로 100% 원상 복구</strong>됩니다.
-                  </p>
-                </div>
-              </div>
-            )}
+            </div>
 
             <div className="mt-5 pt-3 border-t border-[#1a1a1a]/15 flex justify-end">
               <button

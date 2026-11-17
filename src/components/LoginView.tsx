@@ -16,6 +16,7 @@ export const LoginView: React.FC = () => {
     requestPinReset,
     verifyTeacherForPasswordReset,
     resetTeacherPassword,
+    loginSuperAdmin,
     initialUrlClassCode
   } = useClassEconomy();
 
@@ -62,6 +63,13 @@ export const LoginView: React.FC = () => {
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Super Admin Modal State
+  const [isSuperAdminModalOpen, setIsSuperAdminModalOpen] = useState(false);
+  const [superAdminEmailInput, setSuperAdminEmailInput] = useState('');
+  const [superAdminPwInput, setSuperAdminPwInput] = useState('');
+  const [superAdminError, setSuperAdminError] = useState('');
+  const [isSuperAdminLoading, setIsSuperAdminLoading] = useState(false);
 
   React.useEffect(() => {
     setClassCode(initialUrlClassCode || state.classCode);
@@ -1281,7 +1289,113 @@ export const LoginView: React.FC = () => {
             </div>
           </form>
         )}
+
+        {/* Super Admin Discreet Entry */}
+        <div className="mt-6 pt-4 border-t border-stone-200/80 flex items-center justify-center">
+          <button
+            type="button"
+            onClick={() => {
+              setSuperAdminError('');
+              setIsSuperAdminModalOpen(true);
+            }}
+            className="text-[11px] font-semibold text-stone-400 hover:text-[#1a1a1a] flex items-center gap-1 transition-colors"
+          >
+            <span className="material-symbols-outlined text-[14px]">admin_panel_settings</span>
+            <span>통합 관리자 전용 로그인</span>
+          </button>
+        </div>
       </div>
+
+      {/* Super Admin Login Modal */}
+      {isSuperAdminModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-[1px] flex items-center justify-center p-4">
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setSuperAdminError('');
+              setIsSuperAdminLoading(true);
+              try {
+                const res = await loginSuperAdmin(superAdminEmailInput, superAdminPwInput);
+                if (!res.success) {
+                  setSuperAdminError(res.message || '통합 관리자 로그인에 실패했습니다.');
+                } else {
+                  setIsSuperAdminModalOpen(false);
+                }
+              } finally {
+                setIsSuperAdminLoading(false);
+              }
+            }}
+            className="bg-white border border-stone-200 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-[#1a1a1a] text-amber-300 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[20px]">admin_panel_settings</span>
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-[#1a1a1a]">통합 관리자 로그인</h3>
+                  <p className="text-[11px] text-stone-500">전체 교사·학급·코드 총괄 센터</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSuperAdminModalOpen(false)}
+                className="text-stone-400 hover:text-stone-700 p-1"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+
+            {superAdminError && (
+              <div className="p-2.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-semibold">
+                {superAdminError}
+              </div>
+            )}
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-stone-700 mb-1">관리자 아이디 (이메일)</label>
+                <input
+                  type="email"
+                  required
+                  value={superAdminEmailInput}
+                  onChange={e => setSuperAdminEmailInput(e.target.value)}
+                  placeholder="skyhwg0516@gmail.com"
+                  className="w-full px-3 py-2.5 border border-stone-300 rounded-xl bg-[#f7f9fb] focus:bg-white focus:border-[#1a1a1a] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-stone-700 mb-1">관리자 비밀번호</label>
+                <input
+                  type="password"
+                  required
+                  value={superAdminPwInput}
+                  onChange={e => setSuperAdminPwInput(e.target.value)}
+                  placeholder="비밀번호 입력"
+                  className="w-full px-3 py-2.5 border border-stone-300 rounded-xl bg-[#f7f9fb] focus:bg-white focus:border-[#1a1a1a] focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsSuperAdminModalOpen(false)}
+                className="px-4 py-2 text-xs font-bold border border-stone-300 rounded-xl hover:bg-stone-100"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                disabled={isSuperAdminLoading}
+                className="px-5 py-2 text-xs font-bold bg-[#1a1a1a] hover:bg-stone-800 text-amber-300 rounded-xl disabled:opacity-50"
+              >
+                {isSuperAdminLoading ? '확인 중...' : '관리자 접속'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };
