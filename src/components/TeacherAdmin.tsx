@@ -471,6 +471,19 @@ export const TeacherAdmin: React.FC = () => {
 
   // JSON Full Backup & Restore for GitHub Migration / Permanent Archiving
   const backupFileInputRef = React.useRef<HTMLInputElement>(null);
+  const [pendingBackupRestore, setPendingBackupRestore] = useState<{
+    fileName: string;
+    content: string;
+    className: string;
+    classCode: string;
+    currentRound: number;
+    studentCount: number;
+  } | null>(null);
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const [backupRestoreFeedback, setBackupRestoreFeedback] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
 
   const handleDownloadFullBackup = () => {
     try {
@@ -486,7 +499,10 @@ export const TeacherAdmin: React.FC = () => {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (e: any) {
-      alert('백업 파일 생성 실패: ' + (e?.message || '알 수 없는 오류'));
+      setBackupRestoreFeedback({
+        success: false,
+        message: '백업 파일 생성 실패: ' + (e?.message || '알 수 없는 오류')
+      });
     }
   };
 
@@ -494,16 +510,57 @@ export const TeacherAdmin: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = async (event) => {
+    reader.onload = (event) => {
       const content = event.target?.result as string;
       if (!content) return;
-      if (confirm('선택한 백업 파일의 데이터(학생 명단/현금/예금/주식/라운드 상태 등)로 현재 학급 데이터를 복원하시겠습니까?')) {
-        const res = await importFullBackupJSON(content);
-        alert(res.message);
+      try {
+        const parsed = JSON.parse(content);
+        const incoming = parsed.state || parsed;
+        if (!incoming || !Array.isArray(incoming.students)) {
+          setBackupRestoreFeedback({
+            success: false,
+            message: '올바른 키즈리치 학급 백업 JSON 파일이 아닙니다.'
+          });
+          return;
+        }
+        setPendingBackupRestore({
+          fileName: file.name,
+          content,
+          className: incoming.className || '우리반',
+          classCode: incoming.classCode || state.classCode || 'C-10001',
+          currentRound: Number(incoming.currentRound) || 1,
+          studentCount: incoming.students.length
+        });
+      } catch (err: any) {
+        setBackupRestoreFeedback({
+          success: false,
+          message: 'JSON 파일을 읽는 중 오류가 발생했습니다: ' + (err?.message || '파일 형식을 확인해 주세요.')
+        });
       }
     };
     reader.readAsText(file);
     e.target.value = '';
+  };
+
+  const handleConfirmBackupRestore = async () => {
+    if (!pendingBackupRestore || isRestoringBackup) return;
+    setIsRestoringBackup(true);
+    try {
+      const res = await importFullBackupJSON(pendingBackupRestore.content);
+      setPendingBackupRestore(null);
+      setBackupRestoreFeedback({
+        success: res.success,
+        message: res.message
+      });
+    } catch (err: any) {
+      setPendingBackupRestore(null);
+      setBackupRestoreFeedback({
+        success: false,
+        message: '백업 복원 중 오류가 발생했습니다: ' + (err?.message || '알 수 없는 오류')
+      });
+    } finally {
+      setIsRestoringBackup(false);
+    }
   };
 
   // Stock Confirmation Modal State
@@ -930,6 +987,14 @@ export const TeacherAdmin: React.FC = () => {
 
   return (
     <div className="bg-[#f5f2ed] text-[#1a1a1a] min-h-[calc(100vh-40px)] flex flex-col font-sans antialiased">
+      {/* Always-mounted hidden file input so restore buttons work from any tab */}
+      <input
+        type="file"
+        ref={backupFileInputRef}
+        onChange={handleUploadFullBackup}
+        accept=".json,application/json"
+        className="hidden"
+      />
       {/* Top App Bar (Clean, Spacious, Uncluttered) */}
       <header className="bg-[#faf8f5] shadow-2xs sticky top-0 z-40 border-b border-[#1a1a1a]/15">
         <div className="max-w-[1440px] mx-auto px-4 md:px-8 h-16 flex items-center justify-between gap-4">
@@ -2644,13 +2709,6 @@ export const TeacherAdmin: React.FC = () => {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <input
-                  type="file"
-                  ref={backupFileInputRef}
-                  onChange={handleUploadFullBackup}
-                  accept=".json"
-                  className="hidden"
-                />
                 <button
                   type="button"
                   onClick={handleDownloadFullBackup}
@@ -5779,6 +5837,99 @@ service cloud.firestore {
                 className="px-6 py-2.5 bg-[#1a1a1a] hover:bg-stone-800 text-white font-bold text-xs uppercase tracking-wider rounded-2xs shadow-2xs transition-colors"
               >
                 확인 완료
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backup Restore Confirmation Modal */}
+      {pendingBackupRestore && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[1px] flex items-center justify-center p-4">
+          <div className="bg-white border border-[#1a1a1a]/20 rounded-sm shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined">upload_file</span>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-[#1a1a1a]">백업 데이터 복원 확인</h3>
+                <p className="text-xs text-[#1a1a1a]/70 mt-1">
+                  선택한 백업 파일의 내용으로 현재 학급과 학생 자산을 복원합니다.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-[#faf8f5] border border-[#1a1a1a]/10 rounded-2xs p-3.5 text-xs space-y-1.5">
+              <div className="flex justify-between gap-2">
+                <span className="text-[#1a1a1a]/60">파일명</span>
+                <span className="font-mono font-semibold text-right break-all">{pendingBackupRestore.fileName}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-[#1a1a1a]/60">학급 / 코드</span>
+                <span className="font-bold">{pendingBackupRestore.className} ({pendingBackupRestore.classCode})</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-[#1a1a1a]/60">라운드 / 학생 수</span>
+                <span className="font-bold text-emerald-800">
+                  Round {pendingBackupRestore.currentRound} · {pendingBackupRestore.studentCount}명
+                </span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isRestoringBackup}
+                onClick={() => setPendingBackupRestore(null)}
+                className="px-4 py-2 text-xs font-bold border border-[#1a1a1a]/20 rounded-2xs hover:bg-stone-100 transition-colors disabled:opacity-50"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                disabled={isRestoringBackup}
+                onClick={handleConfirmBackupRestore}
+                className="px-5 py-2 text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white rounded-2xs shadow-2xs transition-colors disabled:opacity-50"
+              >
+                {isRestoringBackup ? '복원 중...' : '복원 실행'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backup Restore Result Modal */}
+      {backupRestoreFeedback && (
+        <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px] flex items-center justify-center p-4">
+          <div className="bg-white border border-[#1a1a1a]/20 rounded-sm shadow-2xl max-w-sm w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                  backupRestoreFeedback.success
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-red-100 text-red-800'
+                }`}
+              >
+                <span className="material-symbols-outlined">
+                  {backupRestoreFeedback.success ? 'check_circle' : 'error'}
+                </span>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-[#1a1a1a]">
+                  {backupRestoreFeedback.success ? '백업 복원 완료' : '백업 처리 실패'}
+                </h3>
+                <p className="text-xs text-[#1a1a1a]/80 mt-1 leading-relaxed">
+                  {backupRestoreFeedback.message}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setBackupRestoreFeedback(null)}
+                className="px-5 py-2 text-xs font-bold bg-[#1a1a1a] hover:bg-stone-800 text-white rounded-2xs transition-colors"
+              >
+                확인
               </button>
             </div>
           </div>

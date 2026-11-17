@@ -4110,6 +4110,8 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const restoredState: ClassEconomyState = {
         ...incomingState,
         classCode: targetClassCode,
+        teacherName: currentTeacher?.name || incomingState.teacherName || '선생님',
+        teacherEmail: currentTeacher?.email || incomingState.teacherEmail || '',
         students: cleanStudents,
         scheduledScenarios: Array.isArray(incomingState.scheduledScenarios) ? incomingState.scheduledScenarios : [],
         transactions: Array.isArray(incomingState.transactions) ? incomingState.transactions : state.transactions
@@ -4121,6 +4123,33 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(restoredState));
         localStorage.setItem('kidsrich_students_' + targetClassCode, JSON.stringify(cleanStudents));
       } catch (e) {}
+
+      // Keep logged-in teacher pointing to the restored classCode so future logins open this class
+      if (currentTeacher) {
+        const updatedTeacher: TeacherAccount = {
+          ...currentTeacher,
+          classCode: targetClassCode,
+          className: restoredState.className || currentTeacher.className
+        };
+        setCurrentTeacher(updatedTeacher);
+        try {
+          const authStr = JSON.stringify(updatedTeacher);
+          sessionStorage.setItem('kidsrich_auth_teacher', authStr);
+          localStorage.setItem('kidsrich_auth_teacher', authStr);
+          const savedTeachersStr = localStorage.getItem('kidsrich_teachers');
+          const localTeachers: TeacherAccount[] = savedTeachersStr ? JSON.parse(savedTeachersStr) : [];
+          const idx = localTeachers.findIndex(t => t.teacherId === updatedTeacher.teacherId || (t.email && t.email === updatedTeacher.email));
+          if (idx >= 0) {
+            localTeachers[idx] = updatedTeacher;
+          } else {
+            localTeachers.push(updatedTeacher);
+          }
+          localStorage.setItem('kidsrich_teachers', JSON.stringify(localTeachers));
+        } catch (e) {}
+        try {
+          await saveTeacherToFirestore(updatedTeacher);
+        } catch (e) {}
+      }
 
       // 2. Sync to Firestore (Class Doc + Students)
       try {
