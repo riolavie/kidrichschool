@@ -17,6 +17,8 @@ import {
   writeBatch,
   runTransaction,
   updateDoc,
+  FieldPath,
+  SetOptions,
   Unsubscribe
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -65,6 +67,35 @@ export function sanitizeStockSharesMap(raw: any): Record<string, number> {
     }
   }
   return cleaned;
+}
+
+/**
+ * Deterministic anti-arbitrage stock math helpers:
+ * - Buying rounds shares DOWN / cost UP so cash spent >= share value gained.
+ * - Selling rounds return DOWN / shares deducted UP so cash received <= share value sold.
+ */
+export function calcBuySharesFromAmount(amount: number, price: number): number {
+  const safeAmt = toSafeInt(amount, 0);
+  if (safeAmt <= 0 || !Number.isFinite(price) || price <= 0) return 0;
+  return toSafeShares(Math.floor((safeAmt / price) * 1e8 + 1e-9) / 1e8);
+}
+
+export function calcBuyCostFromShares(shares: number, price: number): number {
+  const safeShares = toSafeShares(shares);
+  if (safeShares <= 0 || !Number.isFinite(price) || price <= 0) return 0;
+  return toSafeInt(Math.ceil(safeShares * price - 1e-6), 0);
+}
+
+export function calcSellReturnFromShares(shares: number, price: number): number {
+  const safeShares = toSafeShares(shares);
+  if (safeShares <= 0 || !Number.isFinite(price) || price <= 0) return 0;
+  return toSafeInt(Math.floor(safeShares * price + 1e-6), 0);
+}
+
+export function calcSellSharesFromAmount(amount: number, price: number): number {
+  const safeAmt = toSafeInt(amount, 0);
+  if (safeAmt <= 0 || !Number.isFinite(price) || price <= 0) return 0;
+  return toSafeShares(Math.ceil((safeAmt / price) * 1e8 - 1e-6) / 1e8);
 }
 
 // Initialize Firebase App (supports both VITE_ env variables and firebase-applet-config.json)
@@ -159,6 +190,17 @@ export function cleanFirestoreData<T>(data: T): T {
 }
 
 /**
+ * Builds SetOptions using top-level FieldPaths so nested maps (especially `stockShares`)
+ * are REPLACED in full instead of deep-merged (which would retain deleted/sold-out keys),
+ * while still preserving any omitted top-level fields (like `isOnline`, `lastSeen`, `lastActive`).
+ */
+export function getReplaceTopLevelMergeOptions(cleaned: Record<string, any>): SetOptions {
+  const keys = Object.keys(cleaned || {});
+  if (keys.length === 0) return { merge: true };
+  return { mergeFields: keys.map((k) => new FieldPath(k)) };
+}
+
+/**
  * Save complete class settings and market metadata to Firestore (does NOT overwrite student presence)
  */
 export async function syncClassToFirestore(state: ClassEconomyState) {
@@ -184,7 +226,7 @@ export async function syncClassToFirestore(state: ClassEconomyState) {
       shopItems: state.shopItems || [],
       updatedAt: new Date().toISOString()
     });
-    await setDoc(classDocRef, payload, { merge: true });
+    await setDoc(classDocRef, payload, getReplaceTopLevelMergeOptions(payload));
   } catch (err) {
     console.warn('Firestore syncClass error:', err);
   }
@@ -212,7 +254,7 @@ export async function syncStudentToFirestore(classCode: string, student: Student
   try {
     const studentRef = doc(db, 'classes', classCode, 'students', student.id);
     const cleaned = cleanFirestoreData(student);
-    await setDoc(studentRef, cleaned, { merge: true });
+    await setDoc(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
   } catch (err) {
     console.warn('Firestore syncStudent error:', err);
   }
@@ -227,7 +269,7 @@ export async function syncStudentProfileFromTeacher(classCode: string, student: 
     const studentRef = doc(db, 'classes', classCode, 'students', student.id);
     const { isOnline, lastSeen, lastActive, ...profileData } = student;
     const cleaned = cleanFirestoreData(profileData);
-    await setDoc(studentRef, cleaned, { merge: true });
+    await setDoc(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
   } catch (err) {
     console.warn('Firestore syncStudentProfileFromTeacher error:', err);
   }
@@ -272,7 +314,7 @@ export async function syncMultipleStudentProfilesFromTeacher(classCode: string, 
         const studentRef = doc(db, 'classes', classCode, 'students', student.id);
         const { isOnline, lastSeen, lastActive, ...profileData } = student;
         const cleaned = cleanFirestoreData(profileData);
-        batch.set(studentRef, cleaned, { merge: true });
+        batch.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       });
       await batch.commit();
     }
@@ -324,7 +366,7 @@ export async function saveMultipleStudentsToFirestore(classCode: string, student
       chunk.forEach((student) => {
         const studentRef = doc(db, 'classes', classCode, 'students', student.id);
         const cleaned = cleanFirestoreData(student);
-        batch.set(studentRef, cleaned, { merge: true });
+        batch.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       });
       await batch.commit();
     }
@@ -823,7 +865,8 @@ export async function runAtomicDeposit(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+      const cleaned = cleanFirestoreData(updated);
+      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       return updated;
     });
 
@@ -886,7 +929,8 @@ export async function runAtomicWithdraw(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+      const cleaned = cleanFirestoreData(updated);
+      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       return updated;
     });
 
@@ -954,11 +998,11 @@ export async function runAtomicBuyStock(
       if (customAmount !== undefined && customAmount > 0) {
         totalCost = toSafeInt(customAmount, 0);
         if (totalCost <= 0) throw new BusinessRuleError('매수 금액은 1원 이상이어야 합니다.');
-        effectiveShares = toSafeShares(totalCost / stock.currentPrice);
+        effectiveShares = calcBuySharesFromAmount(totalCost, stock.currentPrice);
       } else {
-        if (shares <= 0) throw new BusinessRuleError('매수 수량은 0주보다 커야 합니다.');
+        if (!Number.isFinite(shares) || shares <= 0) throw new BusinessRuleError('매수 수량은 0주보다 커야 합니다.');
         effectiveShares = toSafeShares(shares);
-        totalCost = toSafeInt(stock.currentPrice * effectiveShares, 0);
+        totalCost = calcBuyCostFromShares(effectiveShares, stock.currentPrice);
       }
       if (totalCost <= 0 || effectiveShares <= 0) {
         throw new BusinessRuleError('매수 금액 또는 수량이 너무 작습니다.');
@@ -971,6 +1015,9 @@ export async function runAtomicBuyStock(
 
       const currentShares = toSafeShares((current.stockShares || {})[stockId] || 0);
       const newShares = toSafeShares(currentShares + effectiveShares);
+      if (newShares <= currentShares) {
+        throw new BusinessRuleError('매수 수량이 너무 작아 체결할 수 없습니다.');
+      }
       const updatedSharesMap = sanitizeStockSharesMap({
         ...(current.stockShares || {}),
         [stockId]: newShares
@@ -984,7 +1031,8 @@ export async function runAtomicBuyStock(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+      const cleaned = cleanFirestoreData(updated);
+      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       return { updated, totalCost, effectiveShares, stockName: stock.name };
     });
 
@@ -1061,22 +1109,38 @@ export async function runAtomicSellStock(
       let effectiveShares: number;
 
       if (customAmount !== undefined && customAmount > 0) {
-        totalReturn = toSafeInt(customAmount, 0);
-        const maxPossibleReturn = toSafeInt(currentShares * stock.currentPrice, 0);
-        if (totalReturn >= maxPossibleReturn) {
+        const requestedReturn = toSafeInt(customAmount, 0);
+        if (requestedReturn <= 0) {
+          throw new BusinessRuleError('매도 금액은 1원 이상이어야 합니다.');
+        }
+        const maxPossibleReturn = calcSellReturnFromShares(currentShares, stock.currentPrice);
+        if (maxPossibleReturn <= 0) {
+          throw new BusinessRuleError('매도 가능한 주식 평가액이 1원 미만입니다.');
+        }
+        if (requestedReturn >= maxPossibleReturn) {
           totalReturn = maxPossibleReturn;
           effectiveShares = currentShares;
         } else {
-          effectiveShares = toSafeShares(totalReturn / stock.currentPrice);
-          if (effectiveShares > currentShares) effectiveShares = currentShares;
+          totalReturn = requestedReturn;
+          effectiveShares = Math.min(currentShares, calcSellSharesFromAmount(totalReturn, stock.currentPrice));
         }
       } else {
-        if (shares <= 0) throw new BusinessRuleError('매도 수량은 0주보다 커야 합니다.');
+        if (!Number.isFinite(shares) || shares <= 0) {
+          throw new BusinessRuleError('매도 수량은 0주보다 커야 합니다.');
+        }
         effectiveShares = Math.min(currentShares, toSafeShares(shares));
-        totalReturn = toSafeInt(stock.currentPrice * effectiveShares, 0);
+        totalReturn = calcSellReturnFromShares(effectiveShares, stock.currentPrice);
+      }
+
+      if (totalReturn <= 0 || effectiveShares <= 0) {
+        throw new BusinessRuleError('매도 금액 또는 수량이 너무 작습니다.');
       }
 
       const remainingShares = toSafeShares(currentShares - effectiveShares);
+      if (remainingShares >= currentShares) {
+        throw new BusinessRuleError('매도 수량이 정상적으로 차감되지 않아 거래가 취소되었습니다.');
+      }
+
       const updatedSharesMap = sanitizeStockSharesMap({
         ...(current.stockShares || {}),
         [stockId]: remainingShares
@@ -1090,7 +1154,8 @@ export async function runAtomicSellStock(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+      const cleaned = cleanFirestoreData(updated);
+      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       return { updated, totalReturn, effectiveShares, stockName: stock.name };
     });
 
@@ -1155,7 +1220,8 @@ export async function runAtomicBuyShopItem(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+      const cleaned = cleanFirestoreData(updated);
+      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       return updated;
     });
 
@@ -1239,11 +1305,13 @@ export async function runAtomicTransferMoney(
             balanceVersion: (receiver.balanceVersion || 0) + 1,
             updatedAtMs: nowMs
           };
-          tx.set(receiverRef, cleanFirestoreData(updatedReceiver), { merge: true });
+          const cleanedReceiver = cleanFirestoreData(updatedReceiver);
+          tx.set(receiverRef, cleanedReceiver, getReplaceTopLevelMergeOptions(cleanedReceiver));
         }
       }
 
-      tx.set(senderRef, cleanFirestoreData(updatedSender), { merge: true });
+      const cleanedSender = cleanFirestoreData(updatedSender);
+      tx.set(senderRef, cleanedSender, getReplaceTopLevelMergeOptions(cleanedSender));
       return { updatedSender, updatedReceiver };
     });
 
@@ -1279,6 +1347,20 @@ export async function runAtomicRebalance(
 ): Promise<AtomicStudentResult> {
   if (!classCode || !studentId) {
     return { ok: false, error: '리밸런싱 정보가 올바르지 않습니다.' };
+  }
+  const pctsValid =
+    Number.isFinite(targetCashPct) &&
+    Number.isFinite(targetSavingsPct) &&
+    Number.isFinite(targetStockPct) &&
+    targetCashPct >= 0 &&
+    targetSavingsPct >= 0 &&
+    targetStockPct >= 0 &&
+    targetCashPct <= 100 &&
+    targetSavingsPct <= 100 &&
+    targetStockPct <= 100 &&
+    Math.abs(targetCashPct + targetSavingsPct + targetStockPct - 100) <= 0.01;
+  if (!pctsValid) {
+    return { ok: false, error: '목표 자산 비중의 합은 100%여야 합니다.' };
   }
   if (isFirestoreQuotaExceeded()) {
     return { ok: false, fallbackToLocal: true };
@@ -1317,7 +1399,7 @@ export async function runAtomicRebalance(
 
       const targetSavingsAmt = toSafeInt(totalAssets * (targetSavingsPct / 100));
       const targetStockVal = toSafeInt(totalAssets * (targetStockPct / 100));
-      const newShares: Record<string, number> = { ...currentSharesMap };
+      const newShares: Record<string, number> = {};
 
       if (targetStockVal > 0 && stocksList.length > 0) {
         if (currentTotalStock > 0) {
@@ -1333,10 +1415,6 @@ export async function runAtomicRebalance(
             newShares[st.id] = Math.floor(perStockVal / Math.max(1, st.currentPrice || 1));
           });
         }
-      } else {
-        stocksList.forEach(st => {
-          newShares[st.id] = 0;
-        });
       }
 
       const cleanedShares = sanitizeStockSharesMap(newShares);
@@ -1355,7 +1433,8 @@ export async function runAtomicRebalance(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+      const cleaned = cleanFirestoreData(updated);
+      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       return updated;
     });
 
@@ -1420,7 +1499,8 @@ export async function runAtomicRepayDebt(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+      const cleaned = cleanFirestoreData(updated);
+      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       return { updated, cleanAmt };
     });
 
@@ -1474,7 +1554,8 @@ export async function runAtomicForgiveStudentDebt(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+      const cleaned = cleanFirestoreData(updated);
+      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       return { updated, cleanAmt };
     });
 
@@ -1806,7 +1887,8 @@ export async function runAtomicFineOrReward(
                 balanceVersion: (s.balanceVersion || 0) + 1,
                 updatedAtMs: Date.now()
               };
-              tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+              const cleanedReward = cleanFirestoreData(updated);
+              tx.set(studentRef, cleanedReward, getReplaceTopLevelMergeOptions(cleanedReward));
 
               const record: StudentFineRewardRecord = {
                 studentId: s.id,
@@ -1863,7 +1945,8 @@ export async function runAtomicFineOrReward(
                 const sharesHeld = toSafeShares(updatedShares[st.id] || 0);
                 const price = st.currentPrice || 0;
                 if (sharesHeld > 0 && price > 0) {
-                  const holdingVal = toSafeInt(sharesHeld * price);
+                  const holdingVal = calcSellReturnFromShares(sharesHeld, price);
+                  if (holdingVal <= 0) continue;
                   if (holdingVal <= remainingFine) {
                     stockLiquidatedAmt += holdingVal;
                     remainingFine -= holdingVal;
@@ -1876,7 +1959,7 @@ export async function runAtomicFineOrReward(
                     });
                   } else {
                     const soldVal = remainingFine;
-                    const actualSold = Math.min(sharesHeld, toSafeShares(soldVal / price));
+                    const actualSold = Math.min(sharesHeld, calcSellSharesFromAmount(soldVal, price));
                     stockLiquidatedAmt += soldVal;
                     remainingFine = 0;
                     updatedShares[st.id] = toSafeShares(sharesHeld - actualSold);
@@ -1930,7 +2013,8 @@ export async function runAtomicFineOrReward(
               balanceVersion: (s.balanceVersion || 0) + 1,
               updatedAtMs: Date.now()
             };
-            tx.set(studentRef, cleanFirestoreData(updated), { merge: true });
+            const cleanedFine = cleanFirestoreData(updated);
+            tx.set(studentRef, cleanedFine, getReplaceTopLevelMergeOptions(cleanedFine));
 
             const record: StudentFineRewardRecord = {
               studentId: s.id,

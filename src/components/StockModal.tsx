@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useClassEconomy } from '../context/ClassEconomyContext';
+import {
+  calcBuySharesFromAmount,
+  calcBuyCostFromShares,
+  calcSellReturnFromShares,
+  calcSellSharesFromAmount,
+  toSafeShares
+} from '../lib/firebase';
 
 interface StockModalProps {
   isOpen: boolean;
@@ -38,27 +45,47 @@ export const StockModal: React.FC<StockModalProps> = ({ isOpen, onClose, default
     }
   }, [defaultStockId, state.stocks, selectedStockId]);
 
+  // Mirror latest server/context error into modal banner without stale closure
+  useEffect(() => {
+    if (isOpen && lastActionError && !success) {
+      setError(lastActionError);
+    }
+  }, [isOpen, lastActionError, success]);
+
   if (!isOpen || !currentStudent || state.stocks.length === 0) return null;
 
   const stock = state.stocks.find(s => s.id === selectedStockId) || state.stocks[0];
   const stockPrice = stock.currentPrice || 0;
   const currentCash = currentStudent.cash || 0;
-  const ownedShares = (currentStudent.stockShares || {})[stock.id] || 0;
-  const ownedWonValue = Math.round(ownedShares * stockPrice);
+  const ownedShares = toSafeShares((currentStudent.stockShares || {})[stock.id] || 0);
+  const ownedWonValue = calcSellReturnFromShares(ownedShares, stockPrice);
 
   const numericAmount = Math.max(0, parseInt(amountStr.replace(/[^0-9]/g, ''), 10) || 0);
-  const numericShares = Math.max(0, parseFloat(sharesStr) || 0);
+  const rawShares = parseFloat(sharesStr);
+  const numericShares = Number.isFinite(rawShares) && rawShares > 0 ? toSafeShares(rawShares) : 0;
 
-  // Calculate costs and shares based on active orderMode
+  // Calculate costs and shares using exact server-aligned anti-arbitrage math
   let tradeCost = 0;
   let tradeShares = 0;
 
   if (orderMode === 'amount') {
-    tradeCost = numericAmount;
-    tradeShares = stockPrice > 0 ? (numericAmount / stockPrice) : 0;
+    if (tradeType === 'buy') {
+      tradeCost = numericAmount;
+      tradeShares = calcBuySharesFromAmount(numericAmount, stockPrice);
+    } else {
+      tradeCost = Math.min(numericAmount, ownedWonValue);
+      tradeShares = numericAmount >= ownedWonValue && ownedWonValue > 0
+        ? ownedShares
+        : Math.min(ownedShares, calcSellSharesFromAmount(tradeCost, stockPrice));
+    }
   } else {
-    tradeShares = numericShares;
-    tradeCost = Math.round(numericShares * stockPrice);
+    if (tradeType === 'buy') {
+      tradeShares = numericShares;
+      tradeCost = calcBuyCostFromShares(numericShares, stockPrice);
+    } else {
+      tradeShares = Math.min(ownedShares, numericShares);
+      tradeCost = calcSellReturnFromShares(tradeShares, stockPrice);
+    }
   }
 
   // Quick amount buttons helpers
@@ -176,8 +203,8 @@ export const StockModal: React.FC<StockModalProps> = ({ isOpen, onClose, default
     : currentCash + tradeCost;
 
   const projectedSharesAfter = tradeType === 'buy'
-    ? ownedShares + tradeShares
-    : Math.max(0, ownedShares - tradeShares);
+    ? toSafeShares(ownedShares + tradeShares)
+    : toSafeShares(Math.max(0, ownedShares - tradeShares));
 
   const formatShares = (val: number) => {
     if (val <= 0) return '0주';
@@ -510,8 +537,8 @@ export const StockModal: React.FC<StockModalProps> = ({ isOpen, onClose, default
                     <button
                       type="button"
                       onClick={() => {
-                        const maxBuyShares = stockPrice > 0 ? (currentCash / stockPrice) : 0;
-                        setSharesStr(String(parseFloat(maxBuyShares.toFixed(4))));
+                        const maxBuyShares = calcBuySharesFromAmount(currentCash, stockPrice);
+                        setSharesStr(String(maxBuyShares));
                         setError('');
                       }}
                       className="py-1 text-[11px] font-mono font-bold bg-[#1a1a1a]/10 hover:bg-[#1a1a1a]/20 text-[#1a1a1a] border border-[#1a1a1a]/20 rounded-2xs"
@@ -542,7 +569,7 @@ export const StockModal: React.FC<StockModalProps> = ({ isOpen, onClose, default
               <div className="flex justify-between text-[11px] text-[#1a1a1a]/70">
                 <span>거래 후 예상 {stock.name} 보유량:</span>
                 <span className="font-mono font-bold text-[#1a1a1a]">
-                  {formatShares(projectedSharesAfter)} ({Math.round(projectedSharesAfter * stockPrice).toLocaleString()}원)
+                  {formatShares(projectedSharesAfter)} ({calcSellReturnFromShares(projectedSharesAfter, stockPrice).toLocaleString()}원)
                 </span>
               </div>
             </div>

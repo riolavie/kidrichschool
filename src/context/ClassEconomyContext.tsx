@@ -34,6 +34,10 @@ import {
   toSafeInt,
   toSafeShares,
   sanitizeStockSharesMap,
+  calcBuySharesFromAmount,
+  calcBuyCostFromShares,
+  calcSellReturnFromShares,
+  calcSellSharesFromAmount,
   runAtomicDeposit,
   runAtomicWithdraw,
   runAtomicBuyStock,
@@ -1631,7 +1635,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Student Actions (Server-Authoritative Firestore Transactions + Strict Integer Local Fallback)
   const depositSavings = async (amount: number): Promise<boolean> => {
     const cleanAmt = toSafeInt(amount, 0);
-    const lockKey = `deposit:${currentStudentId}`;
+    const lockKey = `studentTx:${currentStudentId}`;
     if (!currentStudent || cleanAmt <= 0 || inFlightStudentTxRef.current.has(lockKey)) return false;
     if (stateRef.current.isTradingFrozen) {
       setLastActionError('현재 거래 정지 상태입니다.');
@@ -1688,7 +1692,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const withdrawSavings = async (amount: number): Promise<boolean> => {
     const cleanAmt = toSafeInt(amount, 0);
-    const lockKey = `withdraw:${currentStudentId}`;
+    const lockKey = `studentTx:${currentStudentId}`;
     if (!currentStudent || cleanAmt <= 0 || inFlightStudentTxRef.current.has(lockKey)) return false;
     if (stateRef.current.isTradingFrozen) {
       setLastActionError('현재 거래 정지 상태입니다.');
@@ -1743,7 +1747,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   const buyStock = async (stockId: string, shares: number, customAmount?: number): Promise<boolean> => {
-    const lockKey = `buyStock:${currentStudentId}`;
+    const lockKey = `studentTx:${currentStudentId}`;
     if (!currentStudent || stateRef.current.isTradingFrozen || inFlightStudentTxRef.current.has(lockKey)) {
       if (stateRef.current.isTradingFrozen) setLastActionError('현재 거래 정지 상태입니다.');
       return false;
@@ -1795,20 +1799,28 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (customAmount !== undefined && customAmount > 0) {
         totalCost = toSafeInt(customAmount, 0);
         if (totalCost <= 0) return false;
-        effectiveShares = toSafeShares(totalCost / stock.currentPrice);
+        effectiveShares = calcBuySharesFromAmount(totalCost, stock.currentPrice);
       } else {
-        if (shares <= 0) return false;
+        if (!Number.isFinite(shares) || shares <= 0) return false;
         effectiveShares = toSafeShares(shares);
-        totalCost = toSafeInt(stock.currentPrice * effectiveShares, 0);
+        totalCost = calcBuyCostFromShares(effectiveShares, stock.currentPrice);
       }
       const liveCash = toSafeInt(liveStudent.cash);
-      if (liveCash < totalCost || totalCost <= 0 || effectiveShares <= 0) {
+      if (totalCost <= 0 || effectiveShares <= 0) {
+        setLastActionError('매수 금액 또는 수량이 너무 작습니다.');
+        return false;
+      }
+      if (liveCash < totalCost) {
         setLastActionError(`보유 현금(${liveCash.toLocaleString()}원)이 부족합니다.`);
         return false;
       }
 
       const currentShares = toSafeShares((liveStudent.stockShares || {})[stockId] || 0);
       const newShares = toSafeShares(currentShares + effectiveShares);
+      if (newShares <= currentShares) {
+        setLastActionError('매수 수량이 너무 작아 체결할 수 없습니다.');
+        return false;
+      }
       const updatedStudent: Student = {
         ...liveStudent,
         cash: liveCash - totalCost,
@@ -1832,7 +1844,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   const sellStock = async (stockId: string, shares: number, customAmount?: number): Promise<boolean> => {
-    const lockKey = `sellStock:${currentStudentId}`;
+    const lockKey = `studentTx:${currentStudentId}`;
     if (!currentStudent || stateRef.current.isTradingFrozen || inFlightStudentTxRef.current.has(lockKey)) {
       if (stateRef.current.isTradingFrozen) setLastActionError('현재 거래 정지 상태입니다.');
       return false;
@@ -1885,20 +1897,34 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       let totalReturn: number;
       let effectiveShares: number;
       if (customAmount !== undefined && customAmount > 0) {
-        totalReturn = toSafeInt(customAmount, 0);
-        const maxPossibleReturn = toSafeInt(currentShares * stock.currentPrice, 0);
-        if (totalReturn >= maxPossibleReturn) {
+        const requestedReturn = toSafeInt(customAmount, 0);
+        if (requestedReturn <= 0) return false;
+        const maxPossibleReturn = calcSellReturnFromShares(currentShares, stock.currentPrice);
+        if (maxPossibleReturn <= 0) {
+          setLastActionError('매도 가능한 주식 평가액이 1원 미만입니다.');
+          return false;
+        }
+        if (requestedReturn >= maxPossibleReturn) {
           totalReturn = maxPossibleReturn;
           effectiveShares = currentShares;
         } else {
-          effectiveShares = Math.min(currentShares, toSafeShares(totalReturn / stock.currentPrice));
+          totalReturn = requestedReturn;
+          effectiveShares = Math.min(currentShares, calcSellSharesFromAmount(totalReturn, stock.currentPrice));
         }
       } else {
-        if (shares <= 0) return false;
+        if (!Number.isFinite(shares) || shares <= 0) return false;
         effectiveShares = Math.min(currentShares, toSafeShares(shares));
-        totalReturn = toSafeInt(stock.currentPrice * effectiveShares, 0);
+        totalReturn = calcSellReturnFromShares(effectiveShares, stock.currentPrice);
+      }
+      if (totalReturn <= 0 || effectiveShares <= 0) {
+        setLastActionError('매도 금액 또는 수량이 너무 작습니다.');
+        return false;
       }
       const remainingShares = toSafeShares(currentShares - effectiveShares);
+      if (remainingShares >= currentShares) {
+        setLastActionError('매도 수량이 정상적으로 차감되지 않아 거래가 취소되었습니다.');
+        return false;
+      }
       const updatedStudent: Student = {
         ...liveStudent,
         cash: toSafeInt(liveStudent.cash) + totalReturn,
@@ -1922,7 +1948,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   const buyShopItem = async (item: ShopItem): Promise<boolean> => {
-    const lockKey = `buyShop:${currentStudentId}`;
+    const lockKey = `studentTx:${currentStudentId}`;
     if (!currentStudent || inFlightStudentTxRef.current.has(lockKey)) return false;
 
     const itemPrice = toSafeInt(item.price, 0);
@@ -1985,7 +2011,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const transferMoney = async (targetName: string, amount: number, note: string): Promise<boolean> => {
     const cleanAmt = toSafeInt(amount, 0);
-    const lockKey = `transfer:${currentStudentId}`;
+    const lockKey = `studentTx:${currentStudentId}`;
     if (!currentStudent || cleanAmt <= 0 || inFlightStudentTxRef.current.has(lockKey)) return false;
 
     const targetStudent = stateRef.current.students.find(s => s.name === targetName) || null;
@@ -2086,9 +2112,24 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
     targetSavingsPct: number,
     targetStockPct: number
   ): Promise<boolean> => {
-    const lockKey = `rebalance:${currentStudentId}`;
+    const lockKey = `studentTx:${currentStudentId}`;
     if (!currentStudent || stateRef.current.isTradingFrozen || inFlightStudentTxRef.current.has(lockKey)) {
       if (stateRef.current.isTradingFrozen) setLastActionError('현재 거래 정지 상태입니다.');
+      return false;
+    }
+    const pctsValid =
+      Number.isFinite(targetCashPct) &&
+      Number.isFinite(targetSavingsPct) &&
+      Number.isFinite(targetStockPct) &&
+      targetCashPct >= 0 &&
+      targetSavingsPct >= 0 &&
+      targetStockPct >= 0 &&
+      targetCashPct <= 100 &&
+      targetSavingsPct <= 100 &&
+      targetStockPct <= 100 &&
+      Math.abs(targetCashPct + targetSavingsPct + targetStockPct - 100) <= 0.01;
+    if (!pctsValid) {
+      setLastActionError('목표 자산 비중의 합은 100%여야 합니다.');
       return false;
     }
 
@@ -2141,7 +2182,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
       const targetSavingsAmt = toSafeInt(totalAssets * (targetSavingsPct / 100));
       const targetStockVal = toSafeInt(totalAssets * (targetStockPct / 100));
-      const newShares: Record<string, number> = { ...currentSharesMap };
+      const newShares: Record<string, number> = {};
 
       if (targetStockVal > 0 && stocksList.length > 0) {
         if (currentTotalStock > 0) {
@@ -2157,10 +2198,6 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
             newShares[st.id] = Math.floor(perStockVal / Math.max(1, st.currentPrice || 1));
           });
         }
-      } else {
-        stocksList.forEach(st => {
-          newShares[st.id] = 0;
-        });
       }
 
       const cleanedShares = sanitizeStockSharesMap(newShares);
@@ -2200,7 +2237,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const repayDebt = async (amount: number): Promise<boolean> => {
     const reqAmt = toSafeInt(amount, 0);
-    const lockKey = `repayDebt:${currentStudentId}`;
+    const lockKey = `studentTx:${currentStudentId}`;
     if (!currentStudent || stateRef.current.isTradingFrozen || reqAmt <= 0 || inFlightStudentTxRef.current.has(lockKey)) {
       if (stateRef.current.isTradingFrozen) setLastActionError('현재 거래 정지 상태입니다.');
       return false;
@@ -3042,6 +3079,9 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const restorePreviousState = () => {
     if (previousStateBackup) {
       syncClassToFirestore(previousStateBackup);
+      if (previousStateBackup.classCode && previousStateBackup.students?.length > 0) {
+        syncMultipleStudentProfilesFromTeacher(previousStateBackup.classCode, previousStateBackup.students);
+      }
       setState(previousStateBackup);
       setPreviousStateBackup(null);
     }
@@ -3208,7 +3248,8 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
             const sharesHeld = toSafeShares(updatedShares[st.id] || 0);
             const price = st.currentPrice || 0;
             if (sharesHeld > 0 && price > 0) {
-              const holdingVal = toSafeInt(sharesHeld * price);
+              const holdingVal = calcSellReturnFromShares(sharesHeld, price);
+              if (holdingVal <= 0) continue;
               if (holdingVal <= remainingFine) {
                 stockLiquidatedAmt += holdingVal;
                 remainingFine -= holdingVal;
@@ -3216,7 +3257,7 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 liquidatedStocks.push({ stockId: st.id, stockName: st.name, shares: sharesHeld, amount: holdingVal });
               } else {
                 const soldVal = remainingFine;
-                const actualSold = Math.min(sharesHeld, toSafeShares(soldVal / price));
+                const actualSold = Math.min(sharesHeld, calcSellSharesFromAmount(soldVal, price));
                 stockLiquidatedAmt += soldVal;
                 remainingFine = 0;
                 updatedShares[st.id] = toSafeShares(sharesHeld - actualSold);
