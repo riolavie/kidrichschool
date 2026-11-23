@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useClassEconomy } from '../context/ClassEconomyContext';
 import { Student, Transaction, StudentRoundSnapshot } from '../types';
 import { getEnrichedStudentTransactions, reconstructStudentRoundHistory } from '../utils/studentAnalytics';
-import { syncStudentProfileFromTeacher } from '../lib/firebase';
+import { syncStudentNonBalanceFieldsFromTeacher } from '../lib/firebase';
 
 interface TeacherStudentAssetDashboardProps {
   initialStudentId?: string;
@@ -173,11 +173,9 @@ export const TeacherStudentAssetDashboard: React.FC<TeacherStudentAssetDashboard
     const existingHistory = Array.isArray(currentStudent.roundHistory) ? currentStudent.roundHistory : [];
     const hasFakeData = existingHistory.some(s => s && s.notes && s.notes.includes('(+1.0%)'));
     if (hasFakeData || existingHistory.length < pastSnapshots.length) {
-      const updatedStudent: Student = {
-        ...currentStudent,
+      syncStudentNonBalanceFieldsFromTeacher(state.classCode, currentStudent.id, {
         roundHistory: pastSnapshots
-      };
-      syncStudentProfileFromTeacher(state.classCode, updatedStudent).catch(err => {
+      }).catch(err => {
         console.warn('Syncing reconstructed round history to Firestore error:', err);
       });
     }

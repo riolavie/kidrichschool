@@ -382,6 +382,34 @@ function mergeStudentKeepingNewerBalance(existing: Student | undefined, incoming
   return incoming;
 }
 
+/**
+ * Always updates the matching student in the array, OR appends them if not yet present,
+ * preventing `.map()` from silently dropping updates when a student was resolved from cache.
+ */
+function upsertStudentInList(students: Student[], updated: Student): Student[] {
+  const safeUpdated = sanitizeStudent(updated);
+  const exists = students.some(s => s.id === safeUpdated.id);
+  if (exists) {
+    return students.map(s => (s.id === safeUpdated.id ? safeUpdated : s));
+  }
+  return [...students, safeUpdated];
+}
+
+function syncStudentAccountCache(classCode: string, updatedStudents: Student[], committed: Student) {
+  try {
+    const safeCommitted = sanitizeStudent(committed);
+    if (classCode) {
+      localStorage.setItem('kidsrich_students_' + classCode, JSON.stringify(updatedStudents));
+    }
+    const activeStudentId = sessionStorage.getItem('kidsrich_auth_student_id') || localStorage.getItem('kidsrich_auth_student_id');
+    if (activeStudentId && activeStudentId === safeCommitted.id) {
+      const serialized = JSON.stringify(safeCommitted);
+      sessionStorage.setItem('kidsrich_auth_student_account', serialized);
+      localStorage.setItem('kidsrich_auth_student_account', serialized);
+    }
+  } catch (e) {}
+}
+
 export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const initialUrlClassCode = useMemo(() => {
     if (typeof window === 'undefined') return '';
@@ -764,6 +792,18 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       matched = candidateList[0] || initialStudents[0];
     }
     const safeMatched = sanitizeStudent(matched);
+    setState(prev => {
+      const nextStudents = upsertStudentInList(
+        prev.classCode === effectiveCode && prev.students.length > 0 ? prev.students : candidateList.map(sanitizeStudent),
+        safeMatched
+      );
+      syncStudentAccountCache(effectiveCode, nextStudents, safeMatched);
+      return {
+        ...prev,
+        classCode: effectiveCode,
+        students: nextStudents
+      };
+    });
     setCurrentStudentId(safeMatched.id);
     sessionStorage.setItem('kidsrich_auth_student_id', safeMatched.id);
     localStorage.setItem('kidsrich_auth_student_id', safeMatched.id);
@@ -1649,11 +1689,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (res.ok && res.student) {
         const committed = res.student;
         const tx = logTx(committed.id, committed.name, 'deposit', cleanAmt, `저축 계좌 ${cleanAmt.toLocaleString()}원 입금`);
-        setState(prev => ({
-          ...prev,
-          students: prev.students.map(s => s.id === committed.id ? committed : s),
-          transactions: [tx, ...prev.transactions]
-        }));
+        setState(prev => {
+          const nextStudents = upsertStudentInList(prev.students, committed);
+          syncStudentAccountCache(prev.classCode, nextStudents, committed);
+          return {
+            ...prev,
+            students: nextStudents,
+            transactions: [tx, ...prev.transactions]
+          };
+        });
         return true;
       }
 
@@ -1679,11 +1723,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       };
       const tx = logTx(updatedStudent.id, updatedStudent.name, 'deposit', cleanAmt, `저축 계좌 ${cleanAmt.toLocaleString()}원 입금`);
       syncStudentToFirestore(stateRef.current.classCode, updatedStudent);
-      setState(prev => ({
-        ...prev,
-        students: prev.students.map(s => s.id === updatedStudent.id ? updatedStudent : s),
-        transactions: [tx, ...prev.transactions]
-      }));
+      setState(prev => {
+        const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+        syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+        return {
+          ...prev,
+          students: nextStudents,
+          transactions: [tx, ...prev.transactions]
+        };
+      });
       return true;
     } finally {
       inFlightStudentTxRef.current.delete(lockKey);
@@ -1706,11 +1754,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (res.ok && res.student) {
         const committed = res.student;
         const tx = logTx(committed.id, committed.name, 'withdraw', cleanAmt, `저축 계좌 ${cleanAmt.toLocaleString()}원 출금`);
-        setState(prev => ({
-          ...prev,
-          students: prev.students.map(s => s.id === committed.id ? committed : s),
-          transactions: [tx, ...prev.transactions]
-        }));
+        setState(prev => {
+          const nextStudents = upsertStudentInList(prev.students, committed);
+          syncStudentAccountCache(prev.classCode, nextStudents, committed);
+          return {
+            ...prev,
+            students: nextStudents,
+            transactions: [tx, ...prev.transactions]
+          };
+        });
         return true;
       }
 
@@ -1735,11 +1787,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       };
       const tx = logTx(updatedStudent.id, updatedStudent.name, 'withdraw', cleanAmt, `저축 계좌 ${cleanAmt.toLocaleString()}원 출금`);
       syncStudentToFirestore(stateRef.current.classCode, updatedStudent);
-      setState(prev => ({
-        ...prev,
-        students: prev.students.map(s => s.id === updatedStudent.id ? updatedStudent : s),
-        transactions: [tx, ...prev.transactions]
-      }));
+      setState(prev => {
+        const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+        syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+        return {
+          ...prev,
+          students: nextStudents,
+          transactions: [tx, ...prev.transactions]
+        };
+      });
       return true;
     } finally {
       inFlightStudentTxRef.current.delete(lockKey);
@@ -1780,11 +1836,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
           totalCost,
           `${res.stockName || stock.name} ${sharesLabel} 매수 (${totalCost.toLocaleString()}원)`
         );
-        setState(prev => ({
-          ...prev,
-          students: prev.students.map(s => s.id === committed.id ? committed : s),
-          transactions: [tx, ...prev.transactions]
-        }));
+        setState(prev => {
+          const nextStudents = upsertStudentInList(prev.students, committed);
+          syncStudentAccountCache(prev.classCode, nextStudents, committed);
+          return {
+            ...prev,
+            students: nextStudents,
+            transactions: [tx, ...prev.transactions]
+          };
+        });
         return true;
       }
 
@@ -1832,11 +1892,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const sharesLabel = Number.isInteger(effectiveShares) ? `${effectiveShares}주` : `${parseFloat(effectiveShares.toFixed(6))}주`;
       const tx = logTx(updatedStudent.id, updatedStudent.name, 'stock_buy', totalCost, `${stock.name} ${sharesLabel} 매수 (${totalCost.toLocaleString()}원)`);
       syncStudentToFirestore(stateRef.current.classCode, updatedStudent);
-      setState(prev => ({
-        ...prev,
-        students: prev.students.map(s => s.id === updatedStudent.id ? updatedStudent : s),
-        transactions: [tx, ...prev.transactions]
-      }));
+      setState(prev => {
+        const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+        syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+        return {
+          ...prev,
+          students: nextStudents,
+          transactions: [tx, ...prev.transactions]
+        };
+      });
       return true;
     } finally {
       inFlightStudentTxRef.current.delete(lockKey);
@@ -1877,11 +1941,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
           totalReturn,
           `${res.stockName || stock.name} ${sharesLabel} 매도 (${totalReturn.toLocaleString()}원)`
         );
-        setState(prev => ({
-          ...prev,
-          students: prev.students.map(s => s.id === committed.id ? committed : s),
-          transactions: [tx, ...prev.transactions]
-        }));
+        setState(prev => {
+          const nextStudents = upsertStudentInList(prev.students, committed);
+          syncStudentAccountCache(prev.classCode, nextStudents, committed);
+          return {
+            ...prev,
+            students: nextStudents,
+            transactions: [tx, ...prev.transactions]
+          };
+        });
         return true;
       }
 
@@ -1936,11 +2004,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const sharesLabel = Number.isInteger(effectiveShares) ? `${effectiveShares}주` : `${parseFloat(effectiveShares.toFixed(6))}주`;
       const tx = logTx(updatedStudent.id, updatedStudent.name, 'stock_sell', totalReturn, `${stock.name} ${sharesLabel} 매도 (${totalReturn.toLocaleString()}원)`);
       syncStudentToFirestore(stateRef.current.classCode, updatedStudent);
-      setState(prev => ({
-        ...prev,
-        students: prev.students.map(s => s.id === updatedStudent.id ? updatedStudent : s),
-        transactions: [tx, ...prev.transactions]
-      }));
+      setState(prev => {
+        const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+        syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+        return {
+          ...prev,
+          students: nextStudents,
+          transactions: [tx, ...prev.transactions]
+        };
+      });
       return true;
     } finally {
       inFlightStudentTxRef.current.delete(lockKey);
@@ -1971,11 +2043,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (res.ok && res.student) {
         const committed = res.student;
         const tx = logTx(committed.id, committed.name, 'shop_buy', itemPrice, `학급 상점: ${item.name} 결제`);
-        setState(prev => ({
-          ...prev,
-          students: prev.students.map(s => s.id === committed.id ? committed : s),
-          transactions: [tx, ...prev.transactions]
-        }));
+        setState(prev => {
+          const nextStudents = upsertStudentInList(prev.students, committed);
+          syncStudentAccountCache(prev.classCode, nextStudents, committed);
+          return {
+            ...prev,
+            students: nextStudents,
+            transactions: [tx, ...prev.transactions]
+          };
+        });
         return true;
       }
 
@@ -1998,11 +2074,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       };
       const tx = logTx(updatedStudent.id, updatedStudent.name, 'shop_buy', itemPrice, `학급 상점: ${item.name} 결제`);
       syncStudentToFirestore(stateRef.current.classCode, updatedStudent);
-      setState(prev => ({
-        ...prev,
-        students: prev.students.map(s => s.id === updatedStudent.id ? updatedStudent : s),
-        transactions: [tx, ...prev.transactions]
-      }));
+      setState(prev => {
+        const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+        syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+        return {
+          ...prev,
+          students: nextStudents,
+          transactions: [tx, ...prev.transactions]
+        };
+      });
       return true;
     } finally {
       inFlightStudentTxRef.current.delete(lockKey);
@@ -2044,15 +2124,18 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
           cleanAmt,
           `${targetName}에게 ${cleanAmt.toLocaleString()}원 송금 (${note || '사유 없음'})`
         );
-        setState(prev => ({
-          ...prev,
-          students: prev.students.map(s => {
-            if (s.id === committedSender.id) return committedSender;
-            if (committedReceiver && s.id === committedReceiver.id) return committedReceiver;
-            return s;
-          }),
-          transactions: [tx, ...prev.transactions]
-        }));
+        setState(prev => {
+          let nextStudents = upsertStudentInList(prev.students, committedSender);
+          if (committedReceiver) {
+            nextStudents = upsertStudentInList(nextStudents, committedReceiver);
+          }
+          syncStudentAccountCache(prev.classCode, nextStudents, committedSender);
+          return {
+            ...prev,
+            students: nextStudents,
+            transactions: [tx, ...prev.transactions]
+          };
+        });
         return true;
       }
 
@@ -2092,15 +2175,18 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
         cleanAmt,
         `${targetName}에게 ${cleanAmt.toLocaleString()}원 송금 (${note || '사유 없음'})`
       );
-      setState(prev => ({
-        ...prev,
-        students: prev.students.map(s => {
-          if (s.id === updatedSender.id) return updatedSender;
-          if (updatedReceiver && s.id === updatedReceiver.id) return updatedReceiver;
-          return s;
-        }),
-        transactions: [tx, ...prev.transactions]
-      }));
+      setState(prev => {
+        let nextStudents = upsertStudentInList(prev.students, updatedSender);
+        if (updatedReceiver) {
+          nextStudents = upsertStudentInList(nextStudents, updatedReceiver);
+        }
+        syncStudentAccountCache(prev.classCode, nextStudents, updatedSender);
+        return {
+          ...prev,
+          students: nextStudents,
+          transactions: [tx, ...prev.transactions]
+        };
+      });
       return true;
     } finally {
       inFlightStudentTxRef.current.delete(lockKey);
@@ -2158,11 +2244,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
           total,
           `자산 비중 리밸런싱 완료 (현금: ${committed.cash.toLocaleString()}원, 저축: ${committed.savings.toLocaleString()}원, 주식: ${actualStockVal.toLocaleString()}원)`
         );
-        setState(prev => ({
-          ...prev,
-          students: prev.students.map(s => s.id === committed.id ? committed : s),
-          transactions: [tx, ...prev.transactions]
-        }));
+        setState(prev => {
+          const nextStudents = upsertStudentInList(prev.students, committed);
+          syncStudentAccountCache(prev.classCode, nextStudents, committed);
+          return {
+            ...prev,
+            students: nextStudents,
+            transactions: [tx, ...prev.transactions]
+          };
+        });
         return true;
       }
 
@@ -2224,11 +2314,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
         `자산 비중 리밸런싱 완료 (현금: ${actualCashAmt.toLocaleString()}원, 저축: ${actualSavingsAmt.toLocaleString()}원, 주식: ${actualStockVal.toLocaleString()}원)`
       );
       syncStudentToFirestore(stateRef.current.classCode, updatedStudent);
-      setState(prev => ({
-        ...prev,
-        students: prev.students.map(s => s.id === updatedStudent.id ? updatedStudent : s),
-        transactions: [tx, ...prev.transactions]
-      }));
+      setState(prev => {
+        const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+        syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+        return {
+          ...prev,
+          students: nextStudents,
+          transactions: [tx, ...prev.transactions]
+        };
+      });
       return true;
     } finally {
       inFlightStudentTxRef.current.delete(lockKey);
@@ -2258,11 +2352,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
           cleanAmt,
           `학급 부채(빚) ${cleanAmt.toLocaleString()}원 상환 완료${leftDebt > 0 ? ` (잔여 빚: ${leftDebt.toLocaleString()}원)` : ' (전액 완제)'}`
         );
-        setState(prev => ({
-          ...prev,
-          students: prev.students.map(s => s.id === committed.id ? committed : s),
-          transactions: [tx, ...prev.transactions]
-        }));
+        setState(prev => {
+          const nextStudents = upsertStudentInList(prev.students, committed);
+          syncStudentAccountCache(prev.classCode, nextStudents, committed);
+          return {
+            ...prev,
+            students: nextStudents,
+            transactions: [tx, ...prev.transactions]
+          };
+        });
         return true;
       }
 
@@ -2295,11 +2393,15 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
         `학급 부채(빚) ${cleanAmt.toLocaleString()}원 상환 완료${leftDebt > 0 ? ` (잔여 빚: ${leftDebt.toLocaleString()}원)` : ' (전액 완제)'}`
       );
       syncStudentToFirestore(stateRef.current.classCode, updatedStudent);
-      setState(prev => ({
-        ...prev,
-        students: prev.students.map(s => s.id === updatedStudent.id ? updatedStudent : s),
-        transactions: [tx, ...prev.transactions]
-      }));
+      setState(prev => {
+        const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+        syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+        return {
+          ...prev,
+          students: nextStudents,
+          transactions: [tx, ...prev.transactions]
+        };
+      });
       return true;
     } finally {
       inFlightStudentTxRef.current.delete(lockKey);
@@ -2390,10 +2492,14 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       recentActivity: `쿠폰 사용 신청 (${targetCoupon?.name || '쿠폰'})`
     };
     syncStudentToFirestore(state.classCode, updatedStudent);
-    setState(prev => ({
-      ...prev,
-      students: prev.students.map(s => s.id === currentStudentId ? updatedStudent : s)
-    }));
+    setState(prev => {
+      const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+      syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+      return {
+        ...prev,
+        students: nextStudents
+      };
+    });
   };
 
   const cancelCouponRequest = (couponId: string) => {
@@ -2416,10 +2522,14 @@ export const ClassEconomyProvider: React.FC<{ children: React.ReactNode }> = ({ 
       recentActivity: `쿠폰 사용 신청 취소 (${targetCoupon?.name || '쿠폰'})`
     };
     syncStudentToFirestore(state.classCode, updatedStudent);
-    setState(prev => ({
-      ...prev,
-      students: prev.students.map(s => s.id === currentStudentId ? updatedStudent : s)
-    }));
+    setState(prev => {
+      const nextStudents = upsertStudentInList(prev.students, updatedStudent);
+      syncStudentAccountCache(prev.classCode, nextStudents, updatedStudent);
+      return {
+        ...prev,
+        students: nextStudents
+      };
+    });
   };
 
   const toggleCouponTeacherConfirm = (studentId: string, couponId: string, forceStatus?: boolean) => {

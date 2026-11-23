@@ -201,6 +201,21 @@ export function getReplaceTopLevelMergeOptions(cleaned: Record<string, any>): Se
 }
 
 /**
+ * Builds a complete Student document payload for pure SetMutation (`tx.set(ref, fullDoc)` with NO merge/mergeFields).
+ * Preserves any auxiliary fields already on the Firestore document (such as `isOnline`, `lastSeen`, `lastActive`)
+ * while unconditionally replacing `stockShares` with the sanitized map so sold-out stock keys can NEVER survive.
+ */
+function buildFullStudentDocForTx(rawExisting: Record<string, any> | undefined, updated: Student): Record<string, any> {
+  const base = rawExisting && typeof rawExisting === 'object' ? { ...rawExisting } : {};
+  const merged = {
+    ...base,
+    ...updated,
+    stockShares: sanitizeStockSharesMap(updated.stockShares)
+  };
+  return cleanFirestoreData(merged);
+}
+
+/**
  * Save complete class settings and market metadata to Firestore (does NOT overwrite student presence)
  */
 export async function syncClassToFirestore(state: ClassEconomyState) {
@@ -247,14 +262,17 @@ export async function isClassCodeTakenInFirestore(classCode: string): Promise<bo
 }
 
 /**
- * Save single student profile/assets to Firestore
+ * Save single student profile/assets to Firestore (pure SetMutation — guarantees removed stockShares keys are deleted)
  */
 export async function syncStudentToFirestore(classCode: string, student: Student) {
   if (!classCode || !student || !student.id) return;
   try {
     const studentRef = doc(db, 'classes', classCode, 'students', student.id);
-    const cleaned = cleanFirestoreData(student);
-    await setDoc(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+    const cleaned = cleanFirestoreData({
+      ...student,
+      stockShares: sanitizeStockSharesMap(student.stockShares)
+    });
+    await setDoc(studentRef, cleaned);
   } catch (err) {
     console.warn('Firestore syncStudent error:', err);
   }
@@ -268,7 +286,10 @@ export async function syncStudentProfileFromTeacher(classCode: string, student: 
   try {
     const studentRef = doc(db, 'classes', classCode, 'students', student.id);
     const { isOnline, lastSeen, lastActive, ...profileData } = student;
-    const cleaned = cleanFirestoreData(profileData);
+    const cleaned = cleanFirestoreData({
+      ...profileData,
+      stockShares: sanitizeStockSharesMap(profileData.stockShares)
+    });
     await setDoc(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
   } catch (err) {
     console.warn('Firestore syncStudentProfileFromTeacher error:', err);
@@ -276,13 +297,13 @@ export async function syncStudentProfileFromTeacher(classCode: string, student: 
 }
 
 /**
- * Targeted non-financial update from teacher (PIN, coupons, name, number)
+ * Targeted non-financial update from teacher (PIN, coupons, name, number, roundHistory)
  * NEVER overwrites live cash, savings, debt, stockShares, or balanceVersion!
  */
 export async function syncStudentNonBalanceFieldsFromTeacher(
   classCode: string,
   studentId: string,
-  fields: Partial<Pick<Student, 'pin' | 'isPinChanged' | 'pinResetRequested' | 'couponsOwned' | 'number' | 'name' | 'recentActivity'>>
+  fields: Partial<Pick<Student, 'pin' | 'isPinChanged' | 'pinResetRequested' | 'couponsOwned' | 'number' | 'name' | 'recentActivity' | 'roundHistory'>>
 ): Promise<boolean> {
   if (!classCode || !studentId) return false;
   try {
@@ -313,7 +334,10 @@ export async function syncMultipleStudentProfilesFromTeacher(classCode: string, 
         if (!student.id) return;
         const studentRef = doc(db, 'classes', classCode, 'students', student.id);
         const { isOnline, lastSeen, lastActive, ...profileData } = student;
-        const cleaned = cleanFirestoreData(profileData);
+        const cleaned = cleanFirestoreData({
+          ...profileData,
+          stockShares: sanitizeStockSharesMap(profileData.stockShares)
+        });
         batch.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
       });
       await batch.commit();
@@ -365,8 +389,11 @@ export async function saveMultipleStudentsToFirestore(classCode: string, student
       const batch = writeBatch(db);
       chunk.forEach((student) => {
         const studentRef = doc(db, 'classes', classCode, 'students', student.id);
-        const cleaned = cleanFirestoreData(student);
-        batch.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+        const cleaned = cleanFirestoreData({
+          ...student,
+          stockShares: sanitizeStockSharesMap(student.stockShares)
+        });
+        batch.set(studentRef, cleaned);
       });
       await batch.commit();
     }
@@ -865,8 +892,8 @@ export async function runAtomicDeposit(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      const cleaned = cleanFirestoreData(updated);
-      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+      const rawExisting = studentSnap.exists() ? (studentSnap.data() as Record<string, any>) : undefined;
+      tx.set(studentRef, buildFullStudentDocForTx(rawExisting, updated));
       return updated;
     });
 
@@ -929,8 +956,8 @@ export async function runAtomicWithdraw(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      const cleaned = cleanFirestoreData(updated);
-      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+      const rawExisting = studentSnap.exists() ? (studentSnap.data() as Record<string, any>) : undefined;
+      tx.set(studentRef, buildFullStudentDocForTx(rawExisting, updated));
       return updated;
     });
 
@@ -1031,8 +1058,8 @@ export async function runAtomicBuyStock(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      const cleaned = cleanFirestoreData(updated);
-      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+      const rawExisting = studentSnap.exists() ? (studentSnap.data() as Record<string, any>) : undefined;
+      tx.set(studentRef, buildFullStudentDocForTx(rawExisting, updated));
       return { updated, totalCost, effectiveShares, stockName: stock.name };
     });
 
@@ -1145,6 +1172,10 @@ export async function runAtomicSellStock(
         ...(current.stockShares || {}),
         [stockId]: remainingShares
       });
+      const verifiedNextShares = toSafeShares(updatedSharesMap[stockId] || 0);
+      if (verifiedNextShares >= currentShares) {
+        throw new BusinessRuleError('매도 수량이 정상적으로 차감되지 않아 거래가 취소되었습니다.');
+      }
 
       const updated: Student = {
         ...current,
@@ -1154,8 +1185,8 @@ export async function runAtomicSellStock(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      const cleaned = cleanFirestoreData(updated);
-      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+      const rawExisting = studentSnap.exists() ? (studentSnap.data() as Record<string, any>) : undefined;
+      tx.set(studentRef, buildFullStudentDocForTx(rawExisting, updated));
       return { updated, totalReturn, effectiveShares, stockName: stock.name };
     });
 
@@ -1220,8 +1251,8 @@ export async function runAtomicBuyShopItem(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      const cleaned = cleanFirestoreData(updated);
-      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+      const rawExisting = studentSnap.exists() ? (studentSnap.data() as Record<string, any>) : undefined;
+      tx.set(studentRef, buildFullStudentDocForTx(rawExisting, updated));
       return updated;
     });
 
@@ -1305,13 +1336,13 @@ export async function runAtomicTransferMoney(
             balanceVersion: (receiver.balanceVersion || 0) + 1,
             updatedAtMs: nowMs
           };
-          const cleanedReceiver = cleanFirestoreData(updatedReceiver);
-          tx.set(receiverRef, cleanedReceiver, getReplaceTopLevelMergeOptions(cleanedReceiver));
+          const rawReceiverExisting = receiverSnap && receiverSnap.exists() ? (receiverSnap.data() as Record<string, any>) : undefined;
+          tx.set(receiverRef, buildFullStudentDocForTx(rawReceiverExisting, updatedReceiver));
         }
       }
 
-      const cleanedSender = cleanFirestoreData(updatedSender);
-      tx.set(senderRef, cleanedSender, getReplaceTopLevelMergeOptions(cleanedSender));
+      const rawSenderExisting = senderSnap.exists() ? (senderSnap.data() as Record<string, any>) : undefined;
+      tx.set(senderRef, buildFullStudentDocForTx(rawSenderExisting, updatedSender));
       return { updatedSender, updatedReceiver };
     });
 
@@ -1433,8 +1464,8 @@ export async function runAtomicRebalance(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      const cleaned = cleanFirestoreData(updated);
-      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+      const rawExisting = studentSnap.exists() ? (studentSnap.data() as Record<string, any>) : undefined;
+      tx.set(studentRef, buildFullStudentDocForTx(rawExisting, updated));
       return updated;
     });
 
@@ -1499,8 +1530,8 @@ export async function runAtomicRepayDebt(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      const cleaned = cleanFirestoreData(updated);
-      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+      const rawExisting = studentSnap.exists() ? (studentSnap.data() as Record<string, any>) : undefined;
+      tx.set(studentRef, buildFullStudentDocForTx(rawExisting, updated));
       return { updated, cleanAmt };
     });
 
@@ -1554,8 +1585,8 @@ export async function runAtomicForgiveStudentDebt(
         balanceVersion: (current.balanceVersion || 0) + 1,
         updatedAtMs: Date.now()
       };
-      const cleaned = cleanFirestoreData(updated);
-      tx.set(studentRef, cleaned, getReplaceTopLevelMergeOptions(cleaned));
+      const rawExisting = snap.exists() ? (snap.data() as Record<string, any>) : undefined;
+      tx.set(studentRef, buildFullStudentDocForTx(rawExisting, updated));
       return { updated, cleanAmt };
     });
 
@@ -1887,8 +1918,8 @@ export async function runAtomicFineOrReward(
                 balanceVersion: (s.balanceVersion || 0) + 1,
                 updatedAtMs: Date.now()
               };
-              const cleanedReward = cleanFirestoreData(updated);
-              tx.set(studentRef, cleanedReward, getReplaceTopLevelMergeOptions(cleanedReward));
+              const rawRewardExisting = snap.exists() ? (snap.data() as Record<string, any>) : undefined;
+              tx.set(studentRef, buildFullStudentDocForTx(rawRewardExisting, updated));
 
               const record: StudentFineRewardRecord = {
                 studentId: s.id,
@@ -2013,8 +2044,8 @@ export async function runAtomicFineOrReward(
               balanceVersion: (s.balanceVersion || 0) + 1,
               updatedAtMs: Date.now()
             };
-            const cleanedFine = cleanFirestoreData(updated);
-            tx.set(studentRef, cleanedFine, getReplaceTopLevelMergeOptions(cleanedFine));
+            const rawFineExisting = snap.exists() ? (snap.data() as Record<string, any>) : undefined;
+            tx.set(studentRef, buildFullStudentDocForTx(rawFineExisting, updated));
 
             const record: StudentFineRewardRecord = {
               studentId: s.id,

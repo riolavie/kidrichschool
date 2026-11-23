@@ -36,14 +36,28 @@ export const StockModal: React.FC<StockModalProps> = ({ isOpen, onClose, default
   const [successMsg, setSuccessMsg] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Sync selectedStockId if defaultStockId changes
+  // Sync selectedStockId and clear transient feedback whenever the modal opens or defaultStockId changes
   useEffect(() => {
+    if (!isOpen) return;
+    setError('');
+    setSuccess(false);
+    setSuccessMsg('');
+    setIsSubmitting(false);
     if (defaultStockId && state.stocks.some(s => s.id === defaultStockId)) {
       setSelectedStockId(defaultStockId);
-    } else if (state.stocks.length > 0 && (!selectedStockId || !state.stocks.some(s => s.id === selectedStockId))) {
+    } else if (state.stocks.length > 0) {
+      setSelectedStockId(prev =>
+        prev && state.stocks.some(s => s.id === prev) ? prev : state.stocks[0].id
+      );
+    }
+  }, [isOpen, defaultStockId]);
+
+  // Keep selectedStockId valid only if stocks list changes and current selection no longer exists
+  useEffect(() => {
+    if (state.stocks.length > 0 && (!selectedStockId || !state.stocks.some(s => s.id === selectedStockId))) {
       setSelectedStockId(state.stocks[0].id);
     }
-  }, [defaultStockId, state.stocks, selectedStockId]);
+  }, [state.stocks, selectedStockId]);
 
   // Mirror latest server/context error into modal banner without stale closure
   useEffect(() => {
@@ -111,7 +125,7 @@ export const StockModal: React.FC<StockModalProps> = ({ isOpen, onClose, default
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (isSubmitting || success) return;
     setError('');
     clearLastActionError();
 
@@ -178,9 +192,11 @@ export const StockModal: React.FC<StockModalProps> = ({ isOpen, onClose, default
 
       setIsSubmitting(true);
       try {
-        const ok = orderMode === 'amount'
+        // When selling full holding value in amount mode, pass exact ownedShares to avoid any Won->share rounding residual
+        const isFullAmountSell = orderMode === 'amount' && ownedWonValue > 0 && numericAmount >= ownedWonValue;
+        const ok = orderMode === 'amount' && !isFullAmountSell
           ? await sellStock(stock.id, 0, numericAmount)
-          : await sellStock(stock.id, numericShares);
+          : await sellStock(stock.id, isFullAmountSell ? ownedShares : numericShares);
 
         if (ok) {
           setSuccessMsg(`${stock.name} ${tradeCost.toLocaleString()}원 매도 완료!`);
